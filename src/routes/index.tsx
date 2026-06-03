@@ -777,6 +777,10 @@ function Index() {
     [connected, log, logError, speakAndWait, text],
   );
 
+  useEffect(() => {
+    handleSendRef.current = handleSend;
+  }, [handleSend]);
+
   const testAvatar = useCallback(async () => {
     log('Teste isolado avatar: "Oi, teste de áudio, tá funcionando"');
     try {
