@@ -130,6 +130,8 @@ function Index() {
   const recognitionModeRef = useRef<RecognitionMode>("chat");
   const resultSinceStartRef = useRef(false);
   const finalTranscriptRef = useRef("");
+  const lastTranscriptRef = useRef("");
+  const handleSendRef = useRef<((rawText?: string) => Promise<void>) | null>(null);
   const isAvatarSpeakingRef = useRef(false);
   const isMutedRef = useRef(true);
   const shouldListenRef = useRef(false);
@@ -234,6 +236,7 @@ function Index() {
         try {
           resultSinceStartRef.current = false;
           finalTranscriptRef.current = "";
+          lastTranscriptRef.current = "";
           recognitionRef.current.start();
           log(`recognition.start(): ${reason}`);
         } catch (error) {
