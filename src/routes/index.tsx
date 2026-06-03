@@ -1,11 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AgentEventsEnum,
-  LiveAvatarSession,
-  SessionEvent,
-} from "@heygen/liveavatar-web-sdk";
+import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import { getSessionToken } from "@/lib/heygen.functions";
 
 export const Route = createFileRoute("/")({
@@ -218,7 +214,11 @@ function Index() {
       micPermissionGrantedRef.current = false;
       const formatted = formatError(error);
       const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
-      setStatus("microphone", "err", `${denied ? "Microfone negado" : "Erro no microfone"}: ${formatted}`);
+      setStatus(
+        "microphone",
+        "err",
+        `${denied ? "Microfone negado" : "Erro no microfone"}: ${formatted}`,
+      );
       log(`getUserMedia: ${denied ? "negado" : "erro"}: ${formatted}`, "err");
       return false;
     }
@@ -290,7 +290,8 @@ function Index() {
     );
     if (!SR) {
       setSpeechSupported(false);
-      const message = "Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.";
+      const message =
+        "Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.";
       setStatus("microphone", "err", message);
       log(message, "err");
       return;
@@ -317,7 +318,9 @@ function Index() {
       setStatus(
         "microphone",
         micPermissionGrantedRef.current ? "ok" : "waiting",
-        micPermissionGrantedRef.current ? "Microfone permitido; ouvindo..." : "Ouvindo; permissão ainda não confirmada",
+        micPermissionGrantedRef.current
+          ? "Microfone permitido; ouvindo..."
+          : "Ouvindo; permissão ainda não confirmada",
       );
       log('SpeechRecognition onstart: "ouvindo..."', "ok");
     };
@@ -385,7 +388,10 @@ function Index() {
         `SpeechRecognition onend: final="${finalText}" houveResultado=${resultSinceStartRef.current} mode=${recognitionModeRef.current}`,
       );
       if (!resultSinceStartRef.current) {
-        log("SpeechRecognition onend disparou sem resultado — alguns navegadores encerram e exigem reiniciar a cada fala.", "err");
+        log(
+          "SpeechRecognition onend disparou sem resultado — alguns navegadores encerram e exigem reiniciar a cada fala.",
+          "err",
+        );
       }
       const transcriptToSend = finalText || lastTranscriptRef.current.trim();
       if (recognitionModeRef.current === "chat" && transcriptToSend) {
@@ -441,11 +447,7 @@ function Index() {
     }
     setStatus(
       "microphone",
-      speechSupported
-        ? micPermissionGrantedRef.current
-          ? "ok"
-          : "waiting"
-        : "err",
+      speechSupported ? (micPermissionGrantedRef.current ? "ok" : "waiting") : "err",
       speechSupported ? "microfone mutado" : "Reconhecimento de voz não suportado",
     );
     log("microfone mutado");
@@ -634,28 +636,25 @@ function Index() {
     setWebrtcState("desconectado");
   }, [log, logError, setStatus]);
 
-  const waitForAvatarEnd = useCallback(
-    (timeoutMs = SPEAK_TIMEOUT_MS) => {
-      return new Promise<void>((resolve, reject) => {
-        const session = sessionRef.current;
-        if (!session || !isAvatarSpeakingRef.current) {
-          resolve();
-          return;
-        }
-        const timer = window.setTimeout(() => {
-          session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
-          reject(new Error(`Timeout aguardando avatar.speak_ended após ${timeoutMs}ms`));
-        }, timeoutMs);
-        const onEnd = () => {
-          window.clearTimeout(timer);
-          session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
-          resolve();
-        };
-        session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
-      });
-    },
-    [],
-  );
+  const waitForAvatarEnd = useCallback((timeoutMs = SPEAK_TIMEOUT_MS) => {
+    return new Promise<void>((resolve, reject) => {
+      const session = sessionRef.current;
+      if (!session || !isAvatarSpeakingRef.current) {
+        resolve();
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
+        reject(new Error(`Timeout aguardando avatar.speak_ended após ${timeoutMs}ms`));
+      }, timeoutMs);
+      const onEnd = () => {
+        window.clearTimeout(timer);
+        session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
+        resolve();
+      };
+      session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
+    });
+  }, []);
 
   const speakAndWait = useCallback(
     async (txt: string) => {
@@ -670,7 +669,11 @@ function Index() {
         const ended = new Promise<void>((resolve, reject) => {
           const timer = window.setTimeout(() => {
             session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
-            reject(new Error(`Timeout aguardando avatar.speak_ended do speak_text após ${SPEAK_TIMEOUT_MS}ms`));
+            reject(
+              new Error(
+                `Timeout aguardando avatar.speak_ended do speak_text após ${SPEAK_TIMEOUT_MS}ms`,
+              ),
+            );
           }, SPEAK_TIMEOUT_MS);
           const onEnd = () => {
             window.clearTimeout(timer);
@@ -806,7 +809,10 @@ function Index() {
           </div>
           <div className="grid gap-2 md:grid-cols-4">
             {(Object.keys(statuses) as StatusKey[]).map((key) => (
-              <div key={key} className="rounded-md border border-border bg-card p-3 text-card-foreground">
+              <div
+                key={key}
+                className="rounded-md border border-border bg-card p-3 text-card-foreground"
+              >
                 <div className="flex items-start gap-2">
                   <StatusDot state={statuses[key].state} />
                   <div className="min-w-0 flex-1">
@@ -956,7 +962,9 @@ function Index() {
                 Log verboso
               </div>
               <div className="h-[520px] overflow-auto p-3 font-mono text-xs leading-relaxed">
-                {logs.length === 0 && <div className="text-muted-foreground">Sem eventos ainda.</div>}
+                {logs.length === 0 && (
+                  <div className="text-muted-foreground">Sem eventos ainda.</div>
+                )}
                 {logs.map((entry, index) => (
                   <pre
                     key={`${entry.t}-${index}`}
