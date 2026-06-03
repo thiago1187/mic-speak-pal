@@ -347,6 +347,7 @@ function Index() {
         if (display) {
           setText(display);
           setLiveTranscript(display);
+          lastTranscriptRef.current = display;
         }
         log(
           `SpeechRecognition onresult: parcial="${partial}" final="${done}" finalAcumulado="${finalTranscriptRef.current}"`,
@@ -386,8 +387,9 @@ function Index() {
       if (!resultSinceStartRef.current) {
         log("SpeechRecognition onend disparou sem resultado — alguns navegadores encerram e exigem reiniciar a cada fala.", "err");
       }
-      if (recognitionModeRef.current === "chat" && finalText) {
-        setTimeout(() => handleSend(finalText), 0);
+      const transcriptToSend = finalText || lastTranscriptRef.current.trim();
+      if (recognitionModeRef.current === "chat" && transcriptToSend) {
+        setTimeout(() => void handleSendRef.current?.(transcriptToSend), 0);
       }
       maybeStartListening("onend");
     };
