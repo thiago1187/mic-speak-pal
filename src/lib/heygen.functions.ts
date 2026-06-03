@@ -6,8 +6,8 @@ const VOICE_ID = "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098";
 const CONTEXT_ID = "620eb98d-45ae-4a6c-9971-2c0915b4c279";
 const LANGUAGE = "pt";
 
-export const getSessionToken = createServerFn({ method: "POST" }).handler(
-  async () => {
+export const getSessionToken = createServerFn({ method: "POST" }).handler(async () => {
+  try {
     const res = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST",
       headers: {
@@ -26,13 +26,22 @@ export const getSessionToken = createServerFn({ method: "POST" }).handler(
     });
 
     const text = await res.text();
+    console.log("HeyGen token response", { status: res.status, body: text });
     if (!res.ok) {
-      throw new Error(`Token error ${res.status}: ${text}`);
+      throw new Error(`Token error ${res.status} ${res.statusText}: ${text}`);
     }
     const json = JSON.parse(text);
     return {
       session_token: json.data.session_token as string,
       session_id: json.data.session_id as string,
+      token_http_status: res.status,
+      token_response_body: text,
     };
-  },
-);
+  } catch (error) {
+    console.error("HeyGen token request failed", error);
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Token request failed: ${String(error)}`);
+  }
+});
