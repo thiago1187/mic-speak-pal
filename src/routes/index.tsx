@@ -895,7 +895,7 @@ function Index() {
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question }),
             body: JSON.stringify({ question }),
           })
             .then(async (response) => {
@@ -1215,7 +1215,7 @@ function Index() {
       try {
         const res = await fetch(t.url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(t.body),
           body: JSON.stringify(t.body),
         });
         const dur = Math.round(performance.now() - t0);
