@@ -811,7 +811,9 @@ function Index() {
     setStatus("session", "waiting", "Sessão encerrada pelo usuário");
     setStatus("video", "waiting", "Sem stream");
     setWebrtcState("desconectado");
+    setMeetOpen(false);
   }, [log, logError, setStatus]);
+
 
   const waitForAvatarEnd = useCallback((timeoutMs = SPEAK_TIMEOUT_MS) => {
     return new Promise<void>((resolve, reject) => {
