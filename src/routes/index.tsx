@@ -1082,9 +1082,27 @@ function Index() {
   }, [log, logError, speakAndWait]);
 
   const testMicrophone = useCallback(() => {
-    log("Teste isolado microfone: ligando reconhecimento sem enviar para webhooks/avatar");
-    void startRecognition("test", "teste isolado de microfone");
-  }, [log, startRecognition]);
+    log("Teste isolado microfone (5s): ligando reconhecimento sem enviar para webhooks/avatar");
+    setMicLastFinal("");
+    setMicLastInterim("");
+    setMicLastError("");
+    if (micTestTimerRef.current !== null) window.clearInterval(micTestTimerRef.current);
+    void startRecognition("test", "teste isolado de microfone (5s)");
+    let remaining = 5;
+    setMicTestRemaining(remaining);
+    micTestTimerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      setMicTestRemaining(remaining);
+      if (remaining <= 0) {
+        if (micTestTimerRef.current !== null) {
+          window.clearInterval(micTestTimerRef.current);
+          micTestTimerRef.current = null;
+        }
+        log("Teste de microfone (5s): encerrando", "ok");
+        muteMic();
+      }
+    }, 1000);
+  }, [log, muteMic, startRecognition]);
 
   const runDiagnostic = useCallback(async () => {
     setDiagRunning(true);
