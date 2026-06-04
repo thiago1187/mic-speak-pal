@@ -803,36 +803,47 @@ function Index() {
       }
       setText("");
       setLiveTranscript("");
-      log(`enviando pergunta: ${question}`);
+      const s = settingsRef.current;
+      const currentMode = modeRef.current;
+      const renanteUrl =
+        currentMode === "conversa"
+          ? s.webhookConversa
+          : currentMode === "reuniao"
+            ? s.webhookReuniao
+            : s.webhookEntrevistador;
+      const useFiller = currentMode !== "entrevistador";
+      log(`enviando pergunta (modo=${currentMode}): ${question}`);
 
-      const fillerP = fetch(FILLER_WEBHOOK, {
+      const fillerP = useFiller
+        ? fetch(s.webhookFiller, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question }),
+          })
+            .then(async (response) => {
+              const body = await response.text();
+              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
+              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
+              try {
+                return JSON.parse(body);
+              } catch {
+                return { filler: body };
+              }
+            })
+            .catch((error) => {
+              logError("erro filler", error);
+              return { filler: "" };
+            })
+        : Promise.resolve({ filler: "" });
+
+      const renanteP = fetch(renanteUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, sessionId: currentMode }),
       })
         .then(async (response) => {
           const body = await response.text();
-          log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
-          if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
-          try {
-            return JSON.parse(body);
-          } catch {
-            return { filler: body };
-          }
-        })
-        .catch((error) => {
-          logError("erro filler", error);
-          return { filler: "" };
-        });
-
-      const renanteP = fetch(RENANTE_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, sessionId: SESSION_ID }),
-      })
-        .then(async (response) => {
-          const body = await response.text();
-          log(`Webhook Renante: HTTP ${response.status} ${response.statusText}\n${body}`);
+          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${body}`);
           if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${body}`);
           try {
             return JSON.parse(body);
@@ -847,16 +858,21 @@ function Index() {
 
       const fillerJson: any = await fillerP;
       const fillerText = (fillerJson?.filler ?? "").toString().trim();
-      log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
+      if (useFiller) {
+        log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
+      } else {
+        log("modo entrevistador — filler desligado");
+      }
       if (fillerText) {
         try {
           await speakAndWait(fillerText);
         } catch (error) {
           logError("erro speak_text filler", error);
         }
-      } else {
+      } else if (useFiller) {
         log("filler vazio — pulando direto pra resposta");
       }
+
 
       const renanteJson: any = await renanteP;
       const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
