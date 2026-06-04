@@ -78,6 +78,16 @@ type StatusKind = "waiting" | "ok" | "err";
 type StatusKey = "token" | "session" | "video" | "microphone";
 type StatusItem = { label: string; state: StatusKind; detail: string };
 type RecognitionMode = "chat" | "test";
+type DiagStatus = "ok" | "fail" | "warn" | "info";
+type DiagItem = {
+  id: string;
+  title: string;
+  status: DiagStatus;
+  detail: string;
+  httpStatus?: number;
+  durationMs?: number;
+  rawPreview?: string;
+};
 
 const initialStatuses: Record<StatusKey, StatusItem> = {
   token: {
