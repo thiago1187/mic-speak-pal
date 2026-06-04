@@ -391,7 +391,7 @@ function Index() {
     const rec = new SR();
     rec.lang = "pt-BR";
     rec.interimResults = true;
-    rec.continuous = false;
+    rec.continuous = true;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
