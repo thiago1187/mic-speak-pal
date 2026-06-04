@@ -262,6 +262,17 @@ function Index() {
   const [micTestRemaining, setMicTestRemaining] = useState(0);
   const micTestTimerRef = useRef<number | null>(null);
 
+  // Meet-like fullscreen overlay
+  const [meetOpen, setMeetOpen] = useState(false);
+  const [camOn, setCamOn] = useState(false);
+  const [camError, setCamError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [logCollapsed, setLogCollapsed] = useState(true);
+  const meetVideoRef = useRef<HTMLVideoElement>(null);
+  const camVideoRef = useRef<HTMLVideoElement>(null);
+  const camStreamRef = useRef<MediaStream | null>(null);
+
+
   useEffect(() => {
     bargeInRef.current = bargeIn;
   }, [bargeIn]);
