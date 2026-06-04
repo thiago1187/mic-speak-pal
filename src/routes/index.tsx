@@ -322,7 +322,6 @@ function Index() {
       if (
         shouldListenRef.current &&
         !isMutedRef.current &&
-        !isAvatarSpeakingRef.current &&
         recognitionRef.current &&
         !isRecognitionRunningRef.current
       ) {
@@ -337,23 +336,12 @@ function Index() {
         }
       } else {
         log(
-          `recognition não reiniciado (${reason}). shouldListen=${shouldListenRef.current} muted=${isMutedRef.current} avatarSpeaking=${isAvatarSpeakingRef.current} running=${isRecognitionRunningRef.current}`,
+          `recognition não reiniciado (${reason}). shouldListen=${shouldListenRef.current} muted=${isMutedRef.current} running=${isRecognitionRunningRef.current}`,
         );
       }
     },
     [log, logError],
   );
-
-  const pauseRecognitionForAvatar = useCallback(() => {
-    log("mic pausado (avatar falando)");
-    try {
-      if (recognitionRef.current && isRecognitionRunningRef.current) {
-        recognitionRef.current.stop();
-      }
-    } catch (error) {
-      logError("recognition.stop() falhou ao pausar por anti-eco", error);
-    }
-  }, [log, logError]);
 
   useEffect(() => {
     log("Inicializando diagnósticos globais");
