@@ -72,6 +72,9 @@ function MeetAvatar() {
   const wsRef = useRef<WebSocket | null>(null);
   const lastSegRef = useRef(""); // dedupe de transcrições repetidas
   const cfgRef = useRef<Cfg>(readConfig());
+  // No modo limpo (sem ?debug=1) NÃO guardamos logs em estado — cada setState é um
+  // re-render, e dentro do navegador do Recall isso rouba CPU do encode do vídeo.
+  const debugRef = useRef(false);
 
   const [logs, setLogs] = useState<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const [status, setStatus] = useState("inicializando…");
@@ -85,7 +88,8 @@ function MeetAvatar() {
     const line = `${new Date().toISOString()} [MEET] ${msg}`;
     if (kind === "err") console.error(line);
     else console.log(line);
-    setLogs((p) => [...p, { t: Date.now(), msg, kind }].slice(-200));
+    // Só acumula em estado (e re-renderiza) quando o painel de debug está visível.
+    if (debugRef.current) setLogs((p) => [...p, { t: Date.now(), msg, kind }].slice(-200));
   }, []);
 
   // ---- fila de fala (espera speak_ended antes da próxima) ----
@@ -292,7 +296,9 @@ function MeetAvatar() {
   useEffect(() => {
     const cfg = readConfig();
     cfgRef.current = cfg;
-    setDebug(new URLSearchParams(window.location.search).get("debug") === "1");
+    const isDebug = new URLSearchParams(window.location.search).get("debug") === "1";
+    debugRef.current = isDebug;
+    setDebug(isDebug);
 
     const missing = (
       ["apiKey", "avatarId", "voiceId", "contextId", "webhookReuniao"] as (keyof Cfg)[]

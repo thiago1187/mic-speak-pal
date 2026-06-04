@@ -36,6 +36,10 @@ export const recallCreateBot = createServerFn({ method: "POST" })
           config: { url: data.outputMediaUrl },
         },
       };
+      // Renderizar o avatar (WebRTC) + recapturar + re-codificar pro Meet é pesado.
+      // A máquina padrão do bot derruba frames → trava. Sobe pra uma maior só aqui
+      // (Camada 3). Camadas 1/2 não usam output_media e seguem na máquina padrão.
+      body.variant = { google_meet: "web_4_core" };
     }
     const res = await fetch(`${RECALL_BASE}/bot/`, {
       method: "POST",
