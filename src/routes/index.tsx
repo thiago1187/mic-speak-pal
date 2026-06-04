@@ -1676,7 +1676,92 @@ function Index() {
           </div>
         </div>
       )}
+
+      {diagOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-4 backdrop-blur">
+          <div className="my-8 w-full max-w-3xl rounded-lg border border-border bg-card p-6 text-card-foreground shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">🩺 Diagnóstico</h2>
+              <button
+                onClick={() => setDiagOpen(false)}
+                className="rounded-md border border-border px-3 py-1 text-sm hover:bg-muted"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="mb-4 flex items-center gap-3">
+              <button
+                onClick={() => void runDiagnostic()}
+                disabled={diagRunning}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {diagRunning ? "Rodando..." : "Rodar diagnóstico"}
+              </button>
+              <p className="text-xs text-muted-foreground">
+                Não dispara avatar nem microfone — apenas checa config, navegador, sessão e webhooks.
+              </p>
+            </div>
+
+            {diagResults.length > 0 && (
+              <div className="mb-4 space-y-2">
+                {diagResults.map((r) => {
+                  const color =
+                    r.status === "ok"
+                      ? "border-status-ok"
+                      : r.status === "fail"
+                        ? "border-destructive"
+                        : "border-status-waiting";
+                  const label =
+                    r.status === "ok"
+                      ? "✅ OK"
+                      : r.status === "fail"
+                        ? "❌ FALHOU"
+                        : r.status === "warn"
+                          ? "⚠️ AVISO"
+                          : "ℹ️ INFO";
+                  return (
+                    <div key={r.id} className={`rounded-md border-l-4 ${color} border-y border-r border-border bg-background p-3`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold">{label} — {r.title}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {r.httpStatus !== undefined && <>HTTP {r.httpStatus} · </>}
+                          {r.durationMs !== undefined && <>{r.durationMs} ms</>}
+                        </div>
+                      </div>
+                      <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted-foreground">
+                        {r.detail}
+                      </pre>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {diagReport && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Relatório (markdown)</div>
+                  <button
+                    onClick={() => void copyDiagReport()}
+                    className="rounded-md border border-border px-3 py-1 text-xs hover:bg-muted"
+                  >
+                    {diagCopied ? "Copiado!" : "📋 Copiar relatório"}
+                  </button>
+                </div>
+                <textarea
+                  readOnly
+                  value={diagReport}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="h-80 w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
+
 
   );
 }
