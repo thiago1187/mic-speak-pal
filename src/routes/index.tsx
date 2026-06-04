@@ -237,6 +237,11 @@ function Index() {
   const [webrtcState, setWebrtcState] = useState("aguardando");
   const [bargeIn, setBargeIn] = useState(false);
   const [meetingActive, setMeetingActive] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResults, setDiagResults] = useState<DiagItem[]>([]);
+  const [diagReport, setDiagReport] = useState("");
+  const [diagCopied, setDiagCopied] = useState(false);
 
   useEffect(() => {
     bargeInRef.current = bargeIn;
