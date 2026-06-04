@@ -283,7 +283,7 @@ function Index() {
   }, [log, logError, setStatus]);
 
   const requestMicrophonePermission = useCallback(async () => {
-    log("getUserMedia({ audio: true }): solicitando permissão explicitamente");
+    log("getUserMedia({ audio: { EC/NS/AGC: true } }): solicitando permissão");
     if (!navigator.mediaDevices?.getUserMedia) {
       const message = "navigator.mediaDevices.getUserMedia não existe neste navegador";
       setStatus("microphone", "err", message);
@@ -291,10 +291,16 @@ function Index() {
       return false;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       stream.getTracks().forEach((track) => track.stop());
       micPermissionGrantedRef.current = true;
-      setStatus("microphone", "ok", "Reconhecimento suportado + permissão de microfone permitida");
+      setStatus("microphone", "ok", "Microfone permitido (EC/NS/AGC). Funciona melhor no Chrome desktop.");
       log("getUserMedia: permitido; tracks de teste encerradas", "ok");
       return true;
     } catch (error: any) {
