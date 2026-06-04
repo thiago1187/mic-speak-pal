@@ -1510,6 +1510,49 @@ function Index() {
               </div>
             </div>
 
+            <div
+              className={`rounded-md border p-3 text-sm ${
+                micState === "ouvindo"
+                  ? "border-status-ok bg-card"
+                  : micState === "erro"
+                    ? "border-destructive bg-card"
+                    : micState === "pedindo permissão"
+                      ? "border-status-waiting bg-card"
+                      : "border-border bg-card"
+              }`}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="font-semibold">🎙️ Diagnóstico de voz</div>
+                <div className="font-mono text-xs">
+                  estado: <span className="font-semibold">{micState}</span>
+                  {micTestRemaining > 0 && (
+                    <> · teste: {micTestRemaining}s</>
+                  )}
+                </div>
+              </div>
+              <div className="grid gap-1 font-mono text-[11px] leading-snug">
+                <div>
+                  <span className="text-muted-foreground">parcial (interim):</span>{" "}
+                  <span className="break-words">{micLastInterim || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">último FINAL:</span>{" "}
+                  <span className="break-words font-semibold">{micLastFinal || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">último erro:</span>{" "}
+                  <span className={`break-words ${micLastError ? "text-destructive" : ""}`}>
+                    {micLastError || "—"}
+                  </span>
+                </div>
+              </div>
+              {!window.isSecureContext && (
+                <div className="mt-2 text-xs text-destructive">
+                  ⚠️ Página não está em HTTPS — microfone bloqueado.
+                </div>
+              )}
+            </div>
+
             <div className="grid gap-2 md:grid-cols-[1fr_auto]">
               <button
                 onClick={interruptAvatar}
