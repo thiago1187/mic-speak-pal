@@ -31,10 +31,13 @@ export const Route = createFileRoute("/meet")({
 const SPEAK_TIMEOUT_MS = 60_000;
 const RECALL_TRANSCRIPT_WS = "wss://meeting-data.bot.recall.ai/api/v1/transcript";
 
-// Mesmas wake/end words do modo Reunião do app principal.
-const WAKE_RE = /\b(ola |oi |ei |hey |alo )?(renante|renan|dante)\b/;
+// Mesma lógica do modo Reunião do app principal (tolerante a variações do ASR).
+const WAKE_RE = /\b(renante|renan|renando|renato|render|dante)\b/;
 const END_RE =
-  /\b(desligar (renante|renan|dante)|tchau (renante|renan|dante)|valeu (renante|renan|dante)|obrigado (renante|renan|dante)|encerra|encerrar|pode parar)\b/;
+  /\b(desligar|desliga|pode desligar|pode parar|pode encerrar|encerra|encerrar|para (renante|renan|renato|render|dante)|chega|tchau|pode ir|era so isso|obrigado por enquanto|dispensar|ja chega|ja deu)\b/;
+const END_ACTIVE_RE = /\b(valeu|vlw|obrigado|obrigada|brigado)\b/; // só conta como desligar quando ATIVO
+const WAKE_GREETING = "Oi, tô aqui!";
+const SLEEP_GREETING = "Beleza, tô saindo. É só me chamar.";
 
 type Cfg = {
   apiKey: string;
@@ -44,6 +47,9 @@ type Cfg = {
   language: string;
   webhookReuniao: string;
   webhookFiller: string;
+  greeting: string; // fala inicial ao entrar (vazio = não fala)
+  meetMode: "wake" | "always"; // wake = só após o nome; always = responde tudo
+  bargeIn: boolean; // permitir interromper a fala dele falando por cima
 };
 
 function readConfig(): Cfg {
@@ -59,6 +65,9 @@ function readConfig(): Cfg {
     language: q.get("language") ?? "pt",
     webhookReuniao: q.get("wr") ?? "",
     webhookFiller: q.get("wf") ?? "",
+    greeting: q.get("greeting") ?? "",
+    meetMode: q.get("mmode") === "always" ? "always" : "wake",
+    bargeIn: q.get("barge") === "1",
   };
 }
 
@@ -231,41 +240,95 @@ function MeetAvatar() {
     [log, speakAndWait],
   );
 
-  // ---- roteia um trecho transcrito (wake/end words da Reunião) ----
+  // ---- roteia um trecho transcrito (classifica LOCAL antes de chamar webhook) ----
   const routeSegment = useCallback(
     async (rawText: string, speaker: string) => {
       const t = (rawText ?? "").trim();
       if (!t) return;
-      // ignora a própria fala do avatar captada pela transcrição
-      if (speaker && /renante/i.test(speaker)) {
+      // ignora a própria fala do avatar captada pela transcrição (evita loop)
+      if (speaker && /renante|renan|dante/i.test(speaker)) {
         log(`(ignora própria fala) ${speaker}: ${t}`);
         return;
       }
       if (t === lastSegRef.current) return; // dedupe
       lastSegRef.current = t;
 
+      // Avatar falando? Barge-in decide: interrompe (ON) ou ignora a fala (OFF).
+      if (isAvatarSpeakingRef.current) {
+        if (cfgRef.current.bargeIn) {
+          try {
+            (sessionRef.current as any)?.interrupt?.();
+            log("barge-in: interrompendo a fala atual", "ok");
+          } catch (e: any) {
+            log(`interrupt falhou: ${e?.message ?? e}`, "err");
+          }
+        } else {
+          log(`(falando, barge-in OFF) ignorado: "${t}"`);
+          return;
+        }
+      }
+
+      // Modo "sempre ativo": responde tudo, sem wake/desligar.
+      if (cfgRef.current.meetMode === "always") {
+        await handleSend(t, true);
+        return;
+      }
+
+      // Modo "wake": classifica wake/desligar (4 casos), igual ao app principal.
       const low = t
         .toLowerCase()
         .normalize("NFD")
         .replace(/[̀-ͯ]/g, "");
+      const isActive = meetingActiveRef.current;
       const hasWake = WAKE_RE.test(low);
-      const hasEnd = END_RE.test(low);
+      let hasEnd = END_RE.test(low);
+      if (!hasEnd && isActive && END_ACTIVE_RE.test(low)) hasEnd = true;
 
-      if (hasEnd && meetingActiveRef.current) {
+      // CASO 2 — ATIVO + desligar → DORMINDO + despedida fixa (sem n8n).
+      if (isActive && hasEnd) {
         meetingActiveRef.current = false;
         setActive(false);
-        log(`comando de encerrar ("${t}") → DORMINDO`, "ok");
+        log(`→ DORMINDO (desligar: "${t}")`, "ok");
+        try {
+          await speakAndWait(SLEEP_GREETING);
+        } catch (e: any) {
+          log(`erro despedida: ${e?.message ?? e}`, "err");
+        }
+        return;
       }
-      let responder = meetingActiveRef.current;
-      if (!meetingActiveRef.current && hasWake) {
+
+      // CASO 1 — DORMINDO + wake word (e não é adeus) → ATIVO.
+      if (!isActive && hasWake && !hasEnd) {
         meetingActiveRef.current = true;
         setActive(true);
-        responder = true;
-        log(`wake word ("${t}") → ATIVO`, "ok");
+        log(`→ ATIVO (wake word: "${t}")`, "ok");
+        const resto = low
+          .replace(/\b(ola|oi|ei|hey|alo|e ai|eai|opa|fala)\b/g, " ")
+          .replace(/\b(renante|renan|renando|renato|render|dante)\b/g, " ")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        if (resto.length >= 4) {
+          await handleSend(t, true); // veio pergunta junto com o nome
+        } else {
+          try {
+            await speakAndWait(WAKE_GREETING); // só chamou o nome
+          } catch (e: any) {
+            log(`erro saudação: ${e?.message ?? e}`, "err");
+          }
+        }
+        return;
       }
-      await handleSend(t, responder);
+
+      // CASO 3 — ATIVO + fala normal → responde.
+      if (isActive) {
+        await handleSend(t, true);
+        return;
+      }
+
+      // CASO 4 — DORMINDO + fala normal → grava contexto (responder:false), sem falar.
+      await handleSend(t, false);
     },
-    [handleSend, log],
+    [handleSend, log, speakAndWait],
   );
 
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
@@ -396,9 +459,29 @@ function MeetAvatar() {
         if (cancelled) return;
         connectedRef.current = true;
         log("sessão LiveAvatar iniciada", "ok");
-        setStatus("conectado — ouvindo a reunião");
 
+        // Estado inicial conforme o modo configurado.
+        if (cfg.meetMode === "always") {
+          meetingActiveRef.current = true;
+          setActive(true);
+          setStatus("conectado — sempre ativo (responde tudo)");
+        } else {
+          setStatus("conectado — dormindo (diga o nome pra acordar)");
+        }
+
+        // Começa a ouvir a reunião antes de falar (não perde transcrição).
         connectWs();
+
+        // Fala inicial configurada (se houver). A própria voz é ignorada na rota.
+        const greeting = (cfg.greeting ?? "").trim();
+        if (greeting) {
+          try {
+            log(`fala inicial: "${greeting}"`, "ok");
+            await speakAndWait(greeting);
+          } catch (e: any) {
+            log(`erro fala inicial: ${e?.message ?? e}`, "err");
+          }
+        }
       } catch (e: any) {
         log(`erro no boot: ${e?.message ?? e}`, "err");
         setStatus(`erro: ${e?.message ?? e}`);
@@ -417,7 +500,7 @@ function MeetAvatar() {
       } catch {}
       sessionRef.current = null;
     };
-  }, [fetchToken, log, routeSegment, tryPlay]);
+  }, [fetchToken, log, routeSegment, tryPlay, speakAndWait]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">

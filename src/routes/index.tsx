@@ -42,6 +42,11 @@ type Settings = {
   meetLink: string;
   recallApiKey: string;
   avatarBaseUrl: string;
+  // Comportamento do avatar DENTRO do Google Meet (Camada 3). No Meet não há
+  // botões/atalhos, então tudo é configurado aqui e embutido no bot ao entrar.
+  meetGreeting: string; // fala inicial ao entrar (vazio = não fala nada)
+  meetMode: "wake" | "always"; // "wake" = só responde após chamar o nome; "always" = responde tudo
+  meetBargeIn: boolean; // permitir interromper a fala dele falando por cima
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -57,6 +62,9 @@ const DEFAULT_SETTINGS: Settings = {
   meetLink: "",
   recallApiKey: "",
   avatarBaseUrl: "",
+  meetGreeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
+  meetMode: "wake",
+  meetBargeIn: false,
 };
 
 function loadSettings(): Settings {
@@ -1212,6 +1220,9 @@ function Index() {
       language: s.language,
       wr: s.webhookReuniao,
       wf: s.webhookFiller,
+      greeting: s.meetGreeting,
+      mmode: s.meetMode,
+      barge: s.meetBargeIn ? "1" : "0",
     });
     const outputMediaUrl = `${base}/meet?${qs.toString()}`;
     log(`[CAMADA 3] Recall POST /bot/ com output_media → ${base}/meet`);
@@ -1258,6 +1269,9 @@ function Index() {
       language: s.language,
       wr: s.webhookReuniao,
       wf: s.webhookFiller,
+      greeting: s.meetGreeting,
+      mmode: s.meetMode,
+      barge: s.meetBargeIn ? "1" : "0",
       debug: "1",
     });
     const url = `${base}/meet?${qs.toString()}`;
@@ -2224,7 +2238,7 @@ function Index() {
                   <label key={key} className="block text-sm">
                     <span className="mb-1 block font-medium">{label}</span>
                     <input
-                      value={settingsDraft[key]}
+                      value={settingsDraft[key] as string}
                       onChange={(e) =>
                         setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
                       }
@@ -2250,7 +2264,7 @@ function Index() {
                   <label key={key} className="block text-sm">
                     <span className="mb-1 block font-medium">{label}</span>
                     <input
-                      value={settingsDraft[key]}
+                      value={settingsDraft[key] as string}
                       onChange={(e) =>
                         setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
                       }
@@ -2302,6 +2316,68 @@ function Index() {
                     dentro do Meet.
                   </span>
                 </label>
+
+                <div className="rounded-md border border-border bg-background/40 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+                    Comportamento dentro do Google Meet (Camada 3)
+                  </div>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    No Meet não há botões — tudo é por voz e por estas configurações,
+                    aplicadas ao entrar.
+                  </p>
+
+                  <label className="mb-3 block text-sm">
+                    <span className="mb-1 block font-medium">Fala inicial (ao entrar)</span>
+                    <textarea
+                      value={settingsDraft.meetGreeting}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, meetGreeting: e.target.value }))
+                      }
+                      rows={2}
+                      placeholder="Ex.: Olá pessoal, eu sou o Renante. É só me chamar pelo nome."
+                      className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      O que ele diz assim que entra. Deixe vazio para não falar nada ao entrar.
+                    </span>
+                  </label>
+
+                  <label className="mb-3 block text-sm">
+                    <span className="mb-1 block font-medium">Modo no Meet</span>
+                    <select
+                      value={settingsDraft.meetMode}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({
+                          ...d,
+                          meetMode: e.target.value === "always" ? "always" : "wake",
+                        }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    >
+                      <option value="wake">Só quando chamado pelo nome (wake word)</option>
+                      <option value="always">Sempre ativo (responde tudo)</option>
+                    </select>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      "Wake word": começa dormindo, acorda ao ouvir "Renante" e dorme com
+                      "pode desligar". "Sempre ativo": responde toda fala da reunião.
+                    </span>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settingsDraft.meetBargeIn}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, meetBargeIn: e.target.checked }))
+                      }
+                    />
+                    Permitir interromper falando (barge-in)
+                  </label>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Ligado: falar por cima interrompe a resposta dele. Desligado: ele
+                    ignora novas falas enquanto está falando (evita ouvir a própria voz).
+                  </span>
+                </div>
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                   <button
                     type="button"
