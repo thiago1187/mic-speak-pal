@@ -1334,6 +1334,13 @@ function Index() {
               >
                 ⚙️ Configurações
               </button>
+              <button
+                onClick={() => setDiagOpen(true)}
+                className="rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
+                aria-label="Diagnóstico"
+                title="Diagnóstico"
+              >
+                🩺 Diagnóstico
             </div>
           </div>
 
