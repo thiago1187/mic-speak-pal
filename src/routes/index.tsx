@@ -1585,7 +1585,7 @@ function Index() {
                 disabled={!speechSupported}
                 className="rounded-md bg-secondary px-4 py-3 text-sm font-semibold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
-                🎤 Testar microfone
+                🎤 Testar microfone (5s){micTestRemaining > 0 ? ` — ${micTestRemaining}s` : ""}
               </button>
             </div>
           </div>
