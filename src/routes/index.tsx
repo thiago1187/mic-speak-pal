@@ -420,26 +420,51 @@ function Index() {
     rec.onresult = (event: any) => {
       try {
         let interim = "";
-        let final = "";
+        const finals: string[] = [];
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i]?.[0]?.transcript ?? "";
-          if (event.results[i].isFinal) final += transcript;
-          else interim += transcript;
+          const transcript = (event.results[i]?.[0]?.transcript ?? "").trim();
+          if (!transcript) continue;
+          if (event.results[i].isFinal) finals.push(transcript);
+          else interim += transcript + " ";
         }
         const partial = interim.trim();
-        const done = final.trim();
         resultSinceStartRef.current = true;
-        if (done) finalTranscriptRef.current = `${finalTranscriptRef.current} ${done}`.trim();
-        const display = (done || partial || finalTranscriptRef.current).trim();
-        if (display) {
-          setText(display);
-          setLiveTranscript(display);
-          lastTranscriptRef.current = display;
+
+        // Se avatar está falando e barge-in está DESLIGADO, ignora tudo.
+        if (isAvatarSpeakingRef.current && !bargeInRef.current) {
+          if (partial) log(`(avatar falando, barge-in OFF) interim ignorado: "${partial}"`);
+          if (finals.length)
+            log(`(avatar falando, barge-in OFF) final ignorado: "${finals.join(" | ")}"`);
+          return;
         }
-        log(
-          `SpeechRecognition onresult: parcial="${partial}" final="${done}" finalAcumulado="${finalTranscriptRef.current}"`,
-          done ? "ok" : "info",
-        );
+
+        if (partial) {
+          setText(partial);
+          setLiveTranscript(partial);
+          lastTranscriptRef.current = partial;
+          log(`SpeechRecognition interim: "${partial}"`);
+        }
+
+        for (const done of finals) {
+          log(`SpeechRecognition FINAL: "${done}"`, "ok");
+          setText(done);
+          setLiveTranscript(done);
+          lastTranscriptRef.current = done;
+          // Barge-in: se avatar fala e barge-in ON, interrompe antes de processar.
+          if (isAvatarSpeakingRef.current && bargeInRef.current) {
+            try {
+              log("barge-in ON: interrompendo avatar", "ok");
+              (sessionRef.current as any)?.interrupt?.();
+            } catch (e) {
+              logError("interrupt() falhou no barge-in", e);
+            }
+          }
+          if (recognitionModeRef.current === "test") {
+            log(`(modo teste de mic) final NÃO enviado: "${done}"`);
+          } else {
+            void handleVoiceUtteranceRef.current?.(done);
+          }
+        }
       } catch (error) {
         logError("Erro dentro de SpeechRecognition onresult", error);
       }
@@ -457,7 +482,7 @@ function Index() {
         isMutedRef.current = true;
         shouldListenRef.current = false;
         setMuted(true);
-        setStatus("microphone", "err", `Permissão de microfone negada: ${details}`);
+        setStatus("microphone", "err", `Permissão negada — use o campo de texto: ${details}`);
       } else if (event?.error === "no-speech") {
         setStatus("microphone", "waiting", `Nenhuma fala detectada: ${details}`);
       } else if (event?.error === "network" || event?.error === "aborted") {
@@ -467,25 +492,15 @@ function Index() {
     rec.onend = () => {
       isRecognitionRunningRef.current = false;
       setListening(false);
-      const finalText = finalTranscriptRef.current.trim();
       log(
-        `SpeechRecognition onend: final="${finalText}" houveResultado=${resultSinceStartRef.current} mode=${recognitionModeRef.current}`,
+        `SpeechRecognition onend (mode=${recognitionModeRef.current}). Reiniciando se mic ligado.`,
       );
-      if (!resultSinceStartRef.current) {
-        log(
-          "SpeechRecognition onend disparou sem resultado — alguns navegadores encerram e exigem reiniciar a cada fala.",
-          "err",
-        );
-      }
-      const transcriptToSend = finalText || lastTranscriptRef.current.trim();
-      if (recognitionModeRef.current === "chat" && transcriptToSend) {
-        setTimeout(() => void handleSendRef.current?.(transcriptToSend), 0);
-      }
-      maybeStartListening("onend");
+      // Web Speech API às vezes para sozinha — reinicia se mic ainda ligado.
+      maybeStartListening("onend auto-restart");
     };
 
     recognitionRef.current = rec;
-    log("SpeechRecognition configurado: lang=pt-BR interimResults=true continuous=false", "ok");
+    log("SpeechRecognition configurado: lang=pt-BR interimResults=true continuous=true", "ok");
     return () => {
       try {
         rec.stop();
