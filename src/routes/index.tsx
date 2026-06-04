@@ -896,7 +896,6 @@ function Index() {
         ? fetch(s.webhookFiller, {
             method: "POST",
             body: JSON.stringify({ question }),
-            body: JSON.stringify({ question }),
           })
             .then(async (response) => {
               const txt = await response.text();
