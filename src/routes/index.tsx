@@ -800,8 +800,10 @@ function Index() {
     [connected, log, logError, waitForAvatarEnd],
   );
 
+  // Núcleo de envio: aceita override de modo e flag `responder` (Reunião).
+  // Aplica REGRA DO VAZIO: se renante output vazio, não fala e não chama filler.
   const handleSend = useCallback(
-    async (rawText?: string) => {
+    async (rawText?: string, opts?: { responder?: boolean }) => {
       const question = (rawText ?? text).trim();
       if (!question) {
         log("handleSend ignorado: texto vazio");
@@ -821,8 +823,40 @@ function Index() {
           : currentMode === "reuniao"
             ? s.webhookReuniao
             : s.webhookEntrevistador;
-      const useFiller = currentMode !== "entrevistador";
-      log(`enviando pergunta (modo=${currentMode}): ${question}`);
+
+      // Reunião: corpo inclui `responder`. Texto digitado default = true.
+      const responder = currentMode === "reuniao" ? opts?.responder ?? true : undefined;
+      const willSpeak =
+        currentMode === "conversa" ||
+        currentMode === "entrevistador" ||
+        (currentMode === "reuniao" && responder === true);
+      const useFiller = willSpeak && currentMode !== "entrevistador";
+
+      const body: Record<string, unknown> = { question, sessionId: currentMode };
+      if (responder !== undefined) body.responder = responder;
+      log(
+        `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
+      );
+
+      const renanteP = fetch(renanteUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(async (response) => {
+          const txt = await response.text();
+          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${txt}`);
+          if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${txt}`);
+          try {
+            return JSON.parse(txt);
+          } catch {
+            return { output: txt };
+          }
+        })
+        .catch((error) => {
+          logError("erro Renante", error);
+          return { output: "" };
+        });
 
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
@@ -831,13 +865,13 @@ function Index() {
             body: JSON.stringify({ question }),
           })
             .then(async (response) => {
-              const body = await response.text();
-              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
-              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
+              const txt = await response.text();
+              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${txt}`);
+              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${txt}`);
               try {
-                return JSON.parse(body);
+                return JSON.parse(txt);
               } catch {
-                return { filler: body };
+                return { filler: txt };
               }
             })
             .catch((error) => {
@@ -846,57 +880,47 @@ function Index() {
             })
         : Promise.resolve({ filler: "" });
 
-      const renanteP = fetch(renanteUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, sessionId: currentMode }),
-      })
-        .then(async (response) => {
-          const body = await response.text();
-          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${body}`);
-          if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${body}`);
-          try {
-            return JSON.parse(body);
-          } catch {
-            return { output: body };
-          }
-        })
-        .catch((error) => {
-          logError("erro Renante", error);
-          return { output: "" };
-        });
-
-      const fillerJson: any = await fillerP;
-      const fillerText = (fillerJson?.filler ?? "").toString().trim();
-      if (useFiller) {
-        log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
-      } else {
-        log("modo entrevistador — filler desligado");
-      }
-      if (fillerText) {
-        try {
-          await speakAndWait(fillerText);
-        } catch (error) {
-          logError("erro speak_text filler", error);
-        }
-      } else if (useFiller) {
-        log("filler vazio — pulando direto pra resposta");
+      // Se não vai falar (Reunião dormindo), só espera o webhook pra logar e sai.
+      if (!willSpeak) {
+        const j: any = await renanteP;
+        log(`(reuniao DORMINDO) resposta ignorada: ${safeStringify(j)}`);
+        return;
       }
 
-
+      // REGRA DO VAZIO: aguarda renante primeiro; se vazio, não fala nem filler.
       const renanteJson: any = await renanteP;
       const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
         .toString()
         .trim();
-      log(`resposta Renante recebida: ${renanteText || safeStringify(renanteJson)}`, "ok");
-      if (renanteText) {
-        try {
-          await speakAndWait(renanteText);
-        } catch (error) {
-          logError("erro speak_text resposta", error);
+      if (!renanteText) {
+        log(
+          `output vazio — avatar fica calado e filler descartado. Payload=${safeStringify(renanteJson)}`,
+        );
+        // Drena promessa do filler pra não vazar
+        void fillerP;
+        return;
+      }
+
+      if (useFiller) {
+        const fillerJson: any = await fillerP;
+        const fillerText = (fillerJson?.filler ?? "").toString().trim();
+        log(`filler recebido: "${fillerText}"`, "ok");
+        if (fillerText) {
+          try {
+            await speakAndWait(fillerText);
+          } catch (error) {
+            logError("erro speak_text filler", error);
+          }
+        } else {
+          log("filler vazio — pulando direto pra resposta");
         }
-      } else {
-        log(`resposta Renante vazia. Payload=${safeStringify(renanteJson)}`, "err");
+      }
+
+      log(`resposta Renante: "${renanteText}"`, "ok");
+      try {
+        await speakAndWait(renanteText);
+      } catch (error) {
+        logError("erro speak_text resposta", error);
       }
     },
     [connected, log, logError, speakAndWait, text],
@@ -905,6 +929,76 @@ function Index() {
   useEffect(() => {
     handleSendRef.current = handleSend;
   }, [handleSend]);
+
+  // Roteia falas reconhecidas no microfone, aplicando wake/end words da Reunião.
+  const handleVoiceUtterance = useCallback(
+    async (utter: string) => {
+      const t = utter.trim();
+      if (!t) return;
+      const currentMode = modeRef.current;
+      const low = t
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+      if (currentMode === "reuniao") {
+        const wakeRe = /\b(ola |oi |ei |hey |alo )?renante\b/;
+        const endRe = /\b(encerra|encerrar|pode parar|valeu renante|tchau renante|obrigado renante)\b/;
+        const hasWake = wakeRe.test(low);
+        const hasEnd = endRe.test(low);
+
+        if (hasEnd && meetingActiveRef.current) {
+          meetingActiveRef.current = false;
+          log(`Reunião: comando de encerrar detectado ("${t}") → DORMINDO`, "ok");
+        }
+        let responder = meetingActiveRef.current;
+        if (!meetingActiveRef.current && hasWake) {
+          meetingActiveRef.current = true;
+          responder = true;
+          log(`Reunião: wake word detectada ("${t}") → ATIVO`, "ok");
+        }
+        await handleSend(t, { responder });
+        return;
+      }
+
+      // Conversa e Entrevistador: fluxo padrão.
+      await handleSend(t);
+    },
+    [handleSend, log],
+  );
+
+  useEffect(() => {
+    handleVoiceUtteranceRef.current = handleVoiceUtterance;
+  }, [handleVoiceUtterance]);
+
+  // Interromper avatar (botão + tecla espaço).
+  const interruptAvatar = useCallback(() => {
+    const session = sessionRef.current as any;
+    if (!session) {
+      log("interrupt ignorado: sem sessão", "err");
+      return;
+    }
+    try {
+      log("⏹️ interrupt() chamado pelo usuário", "ok");
+      session.interrupt?.();
+    } catch (error) {
+      logError("session.interrupt() falhou", error);
+    }
+  }, [log, logError]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      interruptAvatar();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [interruptAvatar]);
+
+
 
   const testAvatar = useCallback(async () => {
     log('Teste isolado avatar: "Oi, teste de áudio, tá funcionando"');
