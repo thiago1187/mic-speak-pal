@@ -1128,6 +1128,120 @@ function Index() {
           </aside>
         </section>
       </main>
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-4 backdrop-blur">
+          <div className="my-8 w-full max-w-2xl rounded-lg border border-border bg-card p-6 text-card-foreground shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Configurações</h2>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-md border border-border px-3 py-1 text-sm hover:bg-muted"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="space-y-5">
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Webhooks n8n
+                </legend>
+                {(
+                  [
+                    ["webhookConversa", "Webhook Conversa"],
+                    ["webhookReuniao", "Webhook Reunião"],
+                    ["webhookEntrevistador", "Webhook Entrevistador"],
+                    ["webhookFiller", "Webhook Filler"],
+                  ] as [keyof Settings, string][]
+                ).map(([key, label]) => (
+                  <label key={key} className="block text-sm">
+                    <span className="mb-1 block font-medium">{label}</span>
+                    <input
+                      value={settingsDraft[key]}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Avatar (LiveAvatar)
+                </legend>
+                {(
+                  [
+                    ["apiKey", "API Key"],
+                    ["avatarId", "avatar_id"],
+                    ["voiceId", "voice_id"],
+                    ["contextId", "context_id"],
+                    ["language", "idioma"],
+                  ] as [keyof Settings, string][]
+                ).map(([key, label]) => (
+                  <label key={key} className="block text-sm">
+                    <span className="mb-1 block font-medium">{label}</span>
+                    <input
+                      value={settingsDraft[key]}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Google Meet / Recall (opcional)
+                </legend>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">Link do Google Meet</span>
+                  <input
+                    value={settingsDraft.meetLink}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, meetLink: e.target.value }))
+                    }
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">Recall API Key</span>
+                  <input
+                    value={settingsDraft.recallApiKey}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, recallApiKey: e.target.value }))
+                    }
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                </label>
+              </fieldset>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveSettings}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+                >
+                  Salvar
+                </button>
+                <button
+                  onClick={() => setSettingsDraft(DEFAULT_SETTINGS)}
+                  className="rounded-md border border-border px-4 py-2 text-sm"
+                >
+                  Restaurar padrões
+                </button>
+                {settingsSaved && (
+                  <span className="text-sm font-medium text-status-ok">Salvo!</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
   );
 }
