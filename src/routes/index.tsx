@@ -1216,6 +1216,7 @@ function Index() {
       try {
         const res = await fetch(t.url, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(t.body),
         });
         const dur = Math.round(performance.now() - t0);
