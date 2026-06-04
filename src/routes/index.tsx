@@ -498,6 +498,7 @@ function Index() {
         if (partial) {
           setText(partial);
           setLiveTranscript(partial);
+          setMicLastInterim(partial);
           lastTranscriptRef.current = partial;
           log(`SpeechRecognition interim: "${partial}"`);
         }
@@ -506,6 +507,8 @@ function Index() {
           log(`SpeechRecognition FINAL: "${done}"`, "ok");
           setText(done);
           setLiveTranscript(done);
+          setMicLastFinal(done);
+          setMicLastInterim("");
           lastTranscriptRef.current = done;
           // Barge-in: se avatar fala e barge-in ON, interrompe antes de processar.
           if (isAvatarSpeakingRef.current && bargeInRef.current) {
