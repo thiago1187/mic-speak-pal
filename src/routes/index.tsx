@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import { getSessionToken } from "@/lib/heygen.functions";
+import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/recall.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -178,6 +179,9 @@ function StatusDot({ state }: { state: StatusKind }) {
 
 function Index() {
   const fetchToken = useServerFn(getSessionToken);
+  const callCreateBot = useServerFn(recallCreateBot);
+  const callGetTranscript = useServerFn(recallGetTranscript);
+  const callLeaveBot = useServerFn(recallLeaveBot);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -271,6 +275,17 @@ function Index() {
   const meetVideoRef = useRef<HTMLVideoElement>(null);
   const camVideoRef = useRef<HTMLVideoElement>(null);
   const camStreamRef = useRef<MediaStream | null>(null);
+
+  // Recall.ai bot state
+  const [botId, setBotId] = useState<string | null>(null);
+  const [botJoining, setBotJoining] = useState(false);
+  const [botStatus, setBotStatus] = useState<string>("");
+  const botIdRef = useRef<string | null>(null);
+  const recallSeenCountRef = useRef(0);
+  const recallPollTimerRef = useRef<number | null>(null);
+  useEffect(() => { botIdRef.current = botId; }, [botId]);
+
+
 
 
   useEffect(() => {
@@ -1091,6 +1106,99 @@ function Index() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [interruptAvatar]);
+
+  // ===== Recall.ai (bot no Google Meet) =====
+  const joinMeetingWithBot = useCallback(async () => {
+    const s = settingsRef.current;
+    if (!s.recallApiKey) { log("Recall: API key vazia (Configurações)", "err"); return; }
+    if (!s.meetLink) { log("Recall: Link do Google Meet vazio (Configurações)", "err"); return; }
+    if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
+    setBotJoining(true);
+    setBotStatus("entrando…");
+    log(`[CAMADA 1] Recall POST /bot/ meeting_url=${s.meetLink} bot_name=Renante`);
+    try {
+      const r: any = await callCreateBot({ data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante" } });
+      log(`[CAMADA 1] Recall resposta HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
+      if (!r.ok || !r.bot?.id) { setBotStatus(`erro ${r.status}`); return; }
+      const id = String(r.bot.id);
+      setBotId(id);
+      botIdRef.current = id;
+      recallSeenCountRef.current = 0;
+      setBotStatus(`bot ativo (${id.slice(0, 8)}…)`);
+      log(`[CAMADA 1] ✅ Bot criado id=${id}. Transcrição em tempo real ativada (meeting_captions).`, "ok");
+      log(`[CAMADA 2] iniciando polling de transcript a cada 2.5s`);
+      log(`[CAMADA 3] ⚠ DESABILITADA: enviar vídeo/áudio do avatar para dentro do Meet requer "output_media" do Recall com URL de página hospedada do avatar (LiveKit em iframe público) ou stream RTMP. Setup atual do LiveAvatar usa LiveKit client SDK — não há saída publicável. Camadas 1 e 2 seguem funcionando normalmente.`, "info");
+    } catch (e) {
+      logError("Recall createBot falhou", e);
+      setBotStatus("erro");
+    } finally {
+      setBotJoining(false);
+    }
+  }, [callCreateBot, log, logError]);
+
+  const leaveMeetingWithBot = useCallback(async () => {
+    const s = settingsRef.current;
+    const id = botIdRef.current;
+    if (!id) return;
+    log(`Recall: removendo bot ${id}`);
+    try {
+      const r: any = await callLeaveBot({ data: { apiKey: s.recallApiKey, botId: id } });
+      log(`Recall leave HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
+    } catch (e) {
+      logError("Recall leaveBot falhou", e);
+    }
+    setBotId(null);
+    botIdRef.current = null;
+    setBotStatus("");
+  }, [callLeaveBot, log, logError]);
+
+  // Polling do transcript do Recall (CAMADA 2)
+  useEffect(() => {
+    if (!botId) return;
+    let stopped = false;
+    const poll = async () => {
+      if (stopped || !botIdRef.current) return;
+      const s = settingsRef.current;
+      try {
+        const r: any = await callGetTranscript({ data: { apiKey: s.recallApiKey, botId: botIdRef.current } });
+        if (!r.ok) {
+          log(`[CAMADA 2] transcript HTTP ${r.status} ${r.body.slice(0, 200)}`, "err");
+        } else {
+          const arr: any[] = Array.isArray(r.transcript)
+            ? r.transcript
+            : Array.isArray(r.transcript?.results)
+              ? r.transcript.results
+              : [];
+          if (arr.length > recallSeenCountRef.current) {
+            const novos = arr.slice(recallSeenCountRef.current);
+            recallSeenCountRef.current = arr.length;
+            for (const seg of novos) {
+              const speaker = (seg?.speaker ?? seg?.participant?.name ?? "").toString();
+              const words = Array.isArray(seg?.words) ? seg.words : [];
+              const text = words.map((w: any) => w?.text ?? "").join(" ").trim()
+                || (seg?.text ?? "").toString().trim();
+              if (!text) continue;
+              if (speaker && /renante/i.test(speaker)) {
+                log(`[CAMADA 2] (ignora própria fala) ${speaker}: ${text}`);
+                continue;
+              }
+              log(`[CAMADA 2] transcript "${speaker}": "${text}" → roteando p/ webhook reuniao via wake/end words`, "ok");
+              try { await handleVoiceUtteranceRef.current?.(text); } catch (e) { logError("dispatch transcript", e); }
+            }
+          }
+        }
+      } catch (e) {
+        logError("recall poll", e);
+      }
+    };
+    void poll();
+    recallPollTimerRef.current = window.setInterval(poll, 2500);
+    return () => {
+      stopped = true;
+      if (recallPollTimerRef.current) { window.clearInterval(recallPollTimerRef.current); recallPollTimerRef.current = null; }
+    };
+  }, [botId, callGetTranscript, log, logError]);
+
 
   // Auto-open Meet overlay when avatar connects
   useEffect(() => {
@@ -2035,7 +2143,30 @@ function Index() {
                     className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
                   />
                 </label>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void joinMeetingWithBot()}
+                    disabled={botJoining || !!botId}
+                    className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                  >
+                    {botJoining ? "Entrando…" : botId ? "Bot na reunião" : "Entrar na reunião com o bot"}
+                  </button>
+                  {botId && (
+                    <button
+                      type="button"
+                      onClick={() => void leaveMeetingWithBot()}
+                      className="rounded-md border border-border px-4 py-2 text-sm"
+                    >
+                      Remover bot
+                    </button>
+                  )}
+                  {botStatus && (
+                    <span className="text-xs text-muted-foreground">{botStatus}</span>
+                  )}
+                </div>
               </fieldset>
+
 
               <div className="flex items-center gap-3">
                 <button
