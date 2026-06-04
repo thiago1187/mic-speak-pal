@@ -21,6 +21,9 @@ export const Route = createFileRoute("/")({
 const SPEAK_TIMEOUT_MS = 60_000;
 const SETTINGS_KEY = "liveavatar.settings.v1";
 const MODE_KEY = "liveavatar.mode.v1";
+// Entrevistador: pausa de silêncio (s) antes de considerar que a pessoa terminou.
+// Fallback caso a config não esteja salva. Ajustável na UI (entrevistadorSilenceSec).
+const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 3;
 
 type Mode = "conversa" | "reuniao" | "entrevistador";
 const MODES: { id: Mode; label: string }[] = [
@@ -48,6 +51,7 @@ type Settings = {
   meetMode: "wake" | "always"; // "wake" = só responde após chamar o nome; "always" = responde tudo
   meetBargeIn: boolean; // permitir interromper a fala dele falando por cima
   meetDebug: boolean; // mostra diagnóstico (status do WebSocket) na câmera do bot
+  entrevistadorSilenceSec: number; // pausa de silêncio (s) antes de fechar a fala no Entrevistador
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -67,6 +71,7 @@ const DEFAULT_SETTINGS: Settings = {
   meetMode: "wake",
   meetBargeIn: false,
   meetDebug: false,
+  entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
 };
 
 function loadSettings(): Settings {
@@ -203,6 +208,9 @@ function Index() {
   const resultSinceStartRef = useRef(false);
   const finalTranscriptRef = useRef("");
   const lastTranscriptRef = useRef("");
+  // Entrevistador: buffer de trechos + timer de silêncio (paciência nas pausas).
+  const interviewerBufferRef = useRef("");
+  const interviewerSilenceTimerRef = useRef<number | null>(null);
   const handleSendRef = useRef<((rawText?: string) => Promise<void>) | null>(null);
   const handleVoiceUtteranceRef = useRef<((text: string) => Promise<void>) | null>(null);
   const isAvatarSpeakingRef = useRef(false);
@@ -256,6 +264,7 @@ function Index() {
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false);
   const [listening, setListening] = useState(false);
+  const [interviewerWaiting, setInterviewerWaiting] = useState(false); // Entrevistador: aguardando a pausa longa
   const [muted, setMuted] = useState(true);
   const [avatarSpeaking, setAvatarSpeaking] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
@@ -315,10 +324,16 @@ function Index() {
     return () => window.clearInterval(id);
   }, []);
 
-  // Ao trocar de modo, reseta o estado DORMINDO da Reunião.
+  // Ao trocar de modo, reseta o estado DORMINDO da Reunião e o buffer do Entrevistador.
   useEffect(() => {
     meetingActiveRef.current = false;
     setMeetingActive(false);
+    if (interviewerSilenceTimerRef.current !== null) {
+      window.clearTimeout(interviewerSilenceTimerRef.current);
+      interviewerSilenceTimerRef.current = null;
+    }
+    interviewerBufferRef.current = "";
+    setInterviewerWaiting(false);
   }, [mode]);
 
   const log = useCallback((msg: string, kind: LogEntry["kind"] = "info") => {
@@ -490,6 +505,30 @@ function Index() {
     rec.continuous = true;
     rec.maxAlternatives = 1;
 
+    // ===== Entrevistador: paciência nas pausas =====
+    // Em vez de enviar a cada "final", acumula e só envia após um silêncio longo.
+    const flushInterviewer = () => {
+      if (interviewerSilenceTimerRef.current !== null) {
+        window.clearTimeout(interviewerSilenceTimerRef.current);
+        interviewerSilenceTimerRef.current = null;
+      }
+      const buffered = interviewerBufferRef.current.trim();
+      interviewerBufferRef.current = "";
+      setInterviewerWaiting(false);
+      if (buffered) {
+        log(`Entrevistador: pausa longa — enviando resposta completa: "${buffered}"`, "ok");
+        void handleVoiceUtteranceRef.current?.(buffered);
+      }
+    };
+    const scheduleInterviewerFlush = () => {
+      setInterviewerWaiting(true);
+      if (interviewerSilenceTimerRef.current !== null) {
+        window.clearTimeout(interviewerSilenceTimerRef.current);
+      }
+      const sec = settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
+      interviewerSilenceTimerRef.current = window.setTimeout(flushInterviewer, Math.max(0.5, sec) * 1000);
+    };
+
     rec.onstart = () => {
       isRecognitionRunningRef.current = true;
       resultSinceStartRef.current = false;
@@ -542,6 +581,10 @@ function Index() {
           setMicLastInterim(partial);
           lastTranscriptRef.current = partial;
           log(`SpeechRecognition interim: "${partial}"`);
+          // Entrevistador: ainda está falando → adia o fechamento (reinicia o silêncio).
+          if (modeRef.current === "entrevistador" && recognitionModeRef.current !== "test") {
+            scheduleInterviewerFlush();
+          }
         }
 
         for (const done of finals) {
@@ -562,6 +605,13 @@ function Index() {
           }
           if (recognitionModeRef.current === "test") {
             log(`(modo teste de mic) final NÃO enviado: "${done}"`);
+          } else if (modeRef.current === "entrevistador") {
+            // Entrevistador: acumula o trecho e aguarda a pausa longa (não envia ainda).
+            interviewerBufferRef.current = `${interviewerBufferRef.current} ${done}`.trim();
+            const sec =
+              settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
+            log(`Entrevistador: trecho acumulado ("${done}") — aguardando ${sec}s de silêncio`);
+            scheduleInterviewerFlush();
           } else {
             void handleVoiceUtteranceRef.current?.(done);
           }
@@ -650,6 +700,13 @@ function Index() {
       micTestTimerRef.current = null;
       setMicTestRemaining(0);
     }
+    // Entrevistador: descarta o timer/buffer de silêncio ao desligar o mic.
+    if (interviewerSilenceTimerRef.current !== null) {
+      window.clearTimeout(interviewerSilenceTimerRef.current);
+      interviewerSilenceTimerRef.current = null;
+    }
+    interviewerBufferRef.current = "";
+    setInterviewerWaiting(false);
     try {
       recognitionRef.current?.stop();
     } catch (error) {
@@ -1858,6 +1915,13 @@ function Index() {
                 <div className="mt-2 min-h-16 rounded-md border border-border bg-background p-3 text-lg font-semibold">
                   {liveTranscript || text || "Fale algo para ver a transcrição aqui em tempo real."}
                 </div>
+                {mode === "entrevistador" && !muted && interviewerWaiting && (
+                  <div className="mt-2 flex items-center gap-2 rounded-md border border-status-ok bg-card px-3 py-2 text-sm font-medium text-status-ok">
+                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-status-ok" />
+                    🎧 Ouvindo… pode pausar pra pensar (só envio depois de{" "}
+                    {settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de silêncio)
+                  </div>
+                )}
                 <div className="mt-2 text-sm text-muted-foreground">
                   {!speechSupported
                     ? "Sem suporte a voz"
@@ -2275,6 +2339,35 @@ function Index() {
                     />
                   </label>
                 ))}
+              </fieldset>
+
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Modo Entrevistador
+                </legend>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">
+                    Tolerância de silêncio (segundos)
+                  </span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={settingsDraft.entrevistadorSilenceSec}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({
+                        ...d,
+                        entrevistadorSilenceSec: Number(e.target.value) || ENTREVISTADOR_SILENCE_SEC_DEFAULT,
+                      }))
+                    }
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Quanto tempo de silêncio aguardar antes de considerar que a pessoa
+                    terminou de responder (acumula as pausas pra pensar). Sugerido 2,5–3,5s.
+                    Só afeta o modo Entrevistador.
+                  </span>
+                </label>
               </fieldset>
 
               <fieldset className="space-y-3">
