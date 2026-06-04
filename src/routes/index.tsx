@@ -17,11 +17,61 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const FILLER_WEBHOOK = "https://n8n.srv1435894.hstgr.cloud/webhook/filler";
-const RENANTE_WEBHOOK =
-  "https://n8n.srv1435894.hstgr.cloud/webhook/c32e3b52-1d99-483f-8da7-c2b2f981687b";
-const SESSION_ID = "teste-voz-001";
 const SPEAK_TIMEOUT_MS = 60_000;
+const SETTINGS_KEY = "liveavatar.settings.v1";
+const MODE_KEY = "liveavatar.mode.v1";
+
+type Mode = "conversa" | "reuniao" | "entrevistador";
+const MODES: { id: Mode; label: string }[] = [
+  { id: "conversa", label: "Conversa" },
+  { id: "reuniao", label: "Reunião" },
+  { id: "entrevistador", label: "Entrevistador" },
+];
+
+type Settings = {
+  webhookConversa: string;
+  webhookReuniao: string;
+  webhookEntrevistador: string;
+  webhookFiller: string;
+  apiKey: string;
+  avatarId: string;
+  voiceId: string;
+  contextId: string;
+  language: string;
+  meetLink: string;
+  recallApiKey: string;
+};
+
+const DEFAULT_SETTINGS: Settings = {
+  webhookConversa: "https://n8n.srv1435894.hstgr.cloud/webhook/c32e3b52-1d99-483f-8da7-c2b2f981687b",
+  webhookReuniao: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-reuniao",
+  webhookEntrevistador: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-entrevistador",
+  webhookFiller: "https://n8n.srv1435894.hstgr.cloud/webhook/filler",
+  apiKey: "33003367-5918-11f1-8d28-066a7fa2e369",
+  avatarId: "17593eee-5774-419c-9923-64694d710c57",
+  voiceId: "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098",
+  contextId: "620eb98d-45ae-4a6c-9971-2c0915b4c279",
+  language: "pt",
+  meetLink: "",
+  recallApiKey: "",
+};
+
+function loadSettings(): Settings {
+  if (typeof window === "undefined") return DEFAULT_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function loadMode(): Mode {
+  if (typeof window === "undefined") return "conversa";
+  const v = window.localStorage.getItem(MODE_KEY) as Mode | null;
+  return v === "conversa" || v === "reuniao" || v === "entrevistador" ? v : "conversa";
+}
 
 type LogEntry = { t: number; msg: string; kind?: "info" | "err" | "ok" };
 type StatusKind = "waiting" | "ok" | "err";
