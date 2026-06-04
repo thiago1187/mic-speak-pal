@@ -92,6 +92,12 @@ function MeetAvatar() {
   const [needsGesture, setNeedsGesture] = useState(false);
   // Por padrão a página é LIMPA (só o avatar, cara de câmera). HUD/logs só com ?debug=1.
   const [debug, setDebug] = useState(false);
+  // Diagnóstico do WebSocket de transcrição (só atualizado/mostrado no modo debug).
+  const [wsDiag, setWsDiag] = useState<{ state: string; count: number; last: string }>({
+    state: "—",
+    count: 0,
+    last: "",
+  });
 
   const log = useCallback((msg: string, kind: "info" | "err" | "ok" = "info") => {
     const line = `${new Date().toISOString()} [MEET] ${msg}`;
@@ -378,14 +384,28 @@ function MeetAvatar() {
       try {
         const ws = new WebSocket(RECALL_TRANSCRIPT_WS);
         wsRef.current = ws;
-        ws.onopen = () => log("WebSocket de transcrição do Recall conectado", "ok");
-        ws.onerror = (e) => log(`WebSocket erro: ${JSON.stringify(e)?.slice(0, 200)}`, "err");
+        ws.onopen = () => {
+          log("WebSocket de transcrição do Recall conectado", "ok");
+          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "CONECTADO" }));
+        };
+        ws.onerror = (e) => {
+          log(`WebSocket erro: ${JSON.stringify(e)?.slice(0, 200)}`, "err");
+          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "ERRO" }));
+        };
         ws.onclose = () => {
           log("WebSocket fechado; reconectando em 3s");
+          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "FECHADO (reconectando)" }));
           if (!cancelled) window.setTimeout(connectWs, 3000);
         };
         ws.onmessage = (event) => {
-          // Log cru ajuda a confirmar o schema real na primeira reunião de teste.
+          // Captura a mensagem CRUA pra diagnóstico (confirma o schema real).
+          if (debugRef.current) {
+            setWsDiag((d) => ({
+              state: "RECEBENDO",
+              count: d.count + 1,
+              last: String(event.data).slice(0, 300),
+            }));
+          }
           let parsed: any = null;
           try {
             parsed = JSON.parse(event.data);
@@ -393,7 +413,10 @@ function MeetAvatar() {
             log(`ws msg não-JSON: ${String(event.data).slice(0, 200)}`);
             return;
           }
-          const tr = parsed?.transcript ?? parsed?.data?.transcript ?? parsed;
+          // Envelope pode vir de várias formas: {transcript:{...}}, {data:{...}},
+          // {event,data:{...}} ou o objeto direto {participant,words,...}.
+          const tr =
+            parsed?.transcript ?? parsed?.data?.transcript ?? parsed?.data ?? parsed;
           const words = Array.isArray(tr?.words) ? tr.words : [];
           const text =
             words.map((w: any) => w?.text ?? "").join(" ").trim() ||
@@ -517,6 +540,17 @@ function MeetAvatar() {
       {/* Tudo abaixo é APENAS no modo de depuração (?debug=1). Na reunião fica limpo. */}
       {debug && (
         <>
+          {/* Painel GRANDE de diagnóstico do WebSocket — legível na câmera do bot. */}
+          <div className="absolute inset-x-0 top-0 bg-black/75 p-3 text-center">
+            <div className="text-lg font-bold text-white">
+              WS: <span className={wsDiag.state === "RECEBENDO" ? "text-emerald-400" : wsDiag.state === "ERRO" ? "text-red-400" : "text-amber-300"}>{wsDiag.state}</span>
+              {" · "}msgs: <span className="text-white">{wsDiag.count}</span>
+            </div>
+            <div className="mx-auto mt-1 max-w-[95%] truncate font-mono text-xs text-white/80">
+              última: {wsDiag.last || "(nenhuma)"}
+            </div>
+          </div>
+
           {needsGesture && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70">
               <button

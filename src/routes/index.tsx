@@ -47,6 +47,7 @@ type Settings = {
   meetGreeting: string; // fala inicial ao entrar (vazio = não fala nada)
   meetMode: "wake" | "always"; // "wake" = só responde após chamar o nome; "always" = responde tudo
   meetBargeIn: boolean; // permitir interromper a fala dele falando por cima
+  meetDebug: boolean; // mostra diagnóstico (status do WebSocket) na câmera do bot
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -65,6 +66,7 @@ const DEFAULT_SETTINGS: Settings = {
   meetGreeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
   meetMode: "wake",
   meetBargeIn: false,
+  meetDebug: false,
 };
 
 function loadSettings(): Settings {
@@ -1223,6 +1225,7 @@ function Index() {
       greeting: s.meetGreeting,
       mmode: s.meetMode,
       barge: s.meetBargeIn ? "1" : "0",
+      debug: s.meetDebug ? "1" : "0",
     });
     const outputMediaUrl = `${base}/meet?${qs.toString()}`;
     log(`[CAMADA 3] Recall POST /bot/ com output_media → ${base}/meet`);
@@ -2376,6 +2379,21 @@ function Index() {
                   <span className="mt-1 block text-xs text-muted-foreground">
                     Ligado: falar por cima interrompe a resposta dele. Desligado: ele
                     ignora novas falas enquanto está falando (evita ouvir a própria voz).
+                  </span>
+
+                  <label className="mt-3 flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settingsDraft.meetDebug}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, meetDebug: e.target.checked }))
+                      }
+                    />
+                    Modo diagnóstico no Meet (mostra status na câmera do bot)
+                  </label>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Use pra depurar: a câmera do Renante mostra se o WebSocket de
+                    transcrição conectou e o que está chegando. Desligue na demo real.
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 pt-1">
