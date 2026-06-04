@@ -2143,7 +2143,30 @@ function Index() {
                     className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
                   />
                 </label>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void joinMeetingWithBot()}
+                    disabled={botJoining || !!botId}
+                    className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                  >
+                    {botJoining ? "Entrando…" : botId ? "Bot na reunião" : "Entrar na reunião com o bot"}
+                  </button>
+                  {botId && (
+                    <button
+                      type="button"
+                      onClick={() => void leaveMeetingWithBot()}
+                      className="rounded-md border border-border px-4 py-2 text-sm"
+                    >
+                      Remover bot
+                    </button>
+                  )}
+                  {botStatus && (
+                    <span className="text-xs text-muted-foreground">{botStatus}</span>
+                  )}
+                </div>
               </fieldset>
+
 
               <div className="flex items-center gap-3">
                 <button
