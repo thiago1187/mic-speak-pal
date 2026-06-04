@@ -331,9 +331,21 @@ function Index() {
 
   const requestMicrophonePermission = useCallback(async () => {
     log("getUserMedia({ audio: { EC/NS/AGC: true } }): solicitando permissão");
+    setMicState("pedindo permissão");
+    setMicLastError("");
+    if (!window.isSecureContext) {
+      const msg = "Contexto não seguro (precisa de HTTPS) para acessar o microfone.";
+      setStatus("microphone", "err", msg);
+      setMicState("erro");
+      setMicLastError(msg);
+      log(msg, "err");
+      return false;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       const message = "navigator.mediaDevices.getUserMedia não existe neste navegador";
       setStatus("microphone", "err", message);
+      setMicState("erro");
+      setMicLastError(message);
       log(message, "err");
       return false;
     }
@@ -354,11 +366,10 @@ function Index() {
       micPermissionGrantedRef.current = false;
       const formatted = formatError(error);
       const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
-      setStatus(
-        "microphone",
-        "err",
-        `${denied ? "Microfone negado" : "Erro no microfone"}: ${formatted}`,
-      );
+      const msg = `${denied ? "Microfone negado pelo navegador" : "Erro no microfone"}: ${formatted}`;
+      setStatus("microphone", "err", msg);
+      setMicState("erro");
+      setMicLastError(msg);
       log(`getUserMedia: ${denied ? "negado" : "erro"}: ${formatted}`, "err");
       return false;
     }
