@@ -41,6 +41,7 @@ type Settings = {
   language: string;
   meetLink: string;
   recallApiKey: string;
+  avatarBaseUrl: string;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +56,7 @@ const DEFAULT_SETTINGS: Settings = {
   language: "pt",
   meetLink: "",
   recallApiKey: "",
+  avatarBaseUrl: "",
 };
 
 function loadSettings(): Settings {
@@ -283,6 +285,9 @@ function Index() {
   const botIdRef = useRef<string | null>(null);
   const recallSeenCountRef = useRef(0);
   const recallPollTimerRef = useRef<number | null>(null);
+  // CAMADA 3: quando o avatar está DENTRO do Meet, a página /meet fala por si;
+  // aqui não falamos localmente (evita fala duplicada), só logamos a transcrição.
+  const avatarInMeetRef = useRef(false);
   useEffect(() => { botIdRef.current = botId; }, [botId]);
 
 
@@ -1115,6 +1120,7 @@ function Index() {
     if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
     setBotJoining(true);
     setBotStatus("entrando…");
+    avatarInMeetRef.current = false; // Camada 1/2: só escuta; fala sai pelo avatar local
     log(`[CAMADA 1] Recall POST /bot/ meeting_url=${s.meetLink} bot_name=Renante`);
     try {
       const r: any = await callCreateBot({ data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante" } });
@@ -1127,10 +1133,59 @@ function Index() {
       setBotStatus(`bot ativo (${id.slice(0, 8)}…)`);
       log(`[CAMADA 1] ✅ Bot criado id=${id}. Transcrição em tempo real ativada (meeting_captions).`, "ok");
       log(`[CAMADA 2] iniciando polling de transcript a cada 2.5s`);
-      log(`[CAMADA 3] ⚠ DESABILITADA: enviar vídeo/áudio do avatar para dentro do Meet requer "output_media" do Recall com URL de página hospedada do avatar (LiveKit em iframe público) ou stream RTMP. Setup atual do LiveAvatar usa LiveKit client SDK — não há saída publicável. Camadas 1 e 2 seguem funcionando normalmente.`, "info");
+      log(`[CAMADA 2] (avatar fala na SUA tela) Para o avatar falar DENTRO do Meet, use o botão "Entrar com avatar no Meet (Camada 3)".`, "info");
     } catch (e) {
       logError("Recall createBot falhou", e);
       setBotStatus("erro");
+    } finally {
+      setBotJoining(false);
+    }
+  }, [callCreateBot, log, logError]);
+
+  // CAMADA 3 — cria o bot com output_media apontando pra página pública /meet,
+  // que faz o avatar aparecer e falar DENTRO da reunião. Não toca nas Camadas 1/2.
+  const joinMeetingWithAvatar = useCallback(async () => {
+    const s = settingsRef.current;
+    if (!s.recallApiKey) { log("Recall: API key vazia (Configurações)", "err"); return; }
+    if (!s.meetLink) { log("Recall: Link do Google Meet vazio (Configurações)", "err"); return; }
+    if (!s.avatarBaseUrl) { log('Camada 3: "URL pública do avatar" vazia. Publique no Lovable e cole a URL base em Configurações.', "err"); return; }
+    if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
+    setBotJoining(true);
+    setBotStatus("entrando (avatar)…");
+    avatarInMeetRef.current = true; // a página /meet fala por si; suprime fala local
+    const base = s.avatarBaseUrl.replace(/\/+$/, "");
+    const qs = new URLSearchParams({
+      apiKey: s.apiKey,
+      avatarId: s.avatarId,
+      voiceId: s.voiceId,
+      contextId: s.contextId,
+      language: s.language,
+      wr: s.webhookReuniao,
+      wf: s.webhookFiller,
+    });
+    const outputMediaUrl = `${base}/meet?${qs.toString()}`;
+    log(`[CAMADA 3] Recall POST /bot/ com output_media → ${base}/meet`);
+    try {
+      const r: any = await callCreateBot({
+        data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante", outputMediaUrl },
+      });
+      log(`[CAMADA 3] Recall resposta HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
+      if (!r.ok || !r.bot?.id) {
+        setBotStatus(`erro ${r.status}`);
+        avatarInMeetRef.current = false;
+        log(`[CAMADA 3] ⚠ Se o erro citar "output_media", o plano do Recall pode não ter o recurso habilitado. Camadas 1 e 2 continuam funcionando.`, "err");
+        return;
+      }
+      const id = String(r.bot.id);
+      setBotId(id);
+      botIdRef.current = id;
+      recallSeenCountRef.current = 0;
+      setBotStatus(`avatar no Meet (${id.slice(0, 8)}…)`);
+      log(`[CAMADA 3] ✅ Bot criado id=${id}. O avatar deve APARECER e FALAR dentro da reunião. Fala local suprimida (a página /meet responde por si).`, "ok");
+    } catch (e) {
+      logError("Recall createBot (avatar) falhou", e);
+      setBotStatus("erro");
+      avatarInMeetRef.current = false;
     } finally {
       setBotJoining(false);
     }
@@ -1149,6 +1204,7 @@ function Index() {
     }
     setBotId(null);
     botIdRef.current = null;
+    avatarInMeetRef.current = false;
     setBotStatus("");
   }, [callLeaveBot, log, logError]);
 
@@ -1180,6 +1236,10 @@ function Index() {
               if (!text) continue;
               if (speaker && /renante/i.test(speaker)) {
                 log(`[CAMADA 2] (ignora própria fala) ${speaker}: ${text}`);
+                continue;
+              }
+              if (avatarInMeetRef.current) {
+                log(`[CAMADA 3] transcript "${speaker}": "${text}" (a página /meet responde por si; fala local suprimida)`);
                 continue;
               }
               log(`[CAMADA 2] transcript "${speaker}": "${text}" → roteando p/ webhook reuniao via wake/end words`, "ok");
@@ -2143,6 +2203,24 @@ function Index() {
                     className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
                   />
                 </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">
+                    URL pública do avatar (Camada 3)
+                  </span>
+                  <input
+                    value={settingsDraft.avatarBaseUrl}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, avatarBaseUrl: e.target.value }))
+                    }
+                    placeholder="https://seu-app.lovableproject.com"
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    URL base do app publicado (sem barra final). O bot do Recall vai
+                    renderizar <code>{"<base>/meet"}</code> e transmitir o avatar para
+                    dentro do Meet.
+                  </span>
+                </label>
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                   <button
                     type="button"
@@ -2151,6 +2229,15 @@ function Index() {
                     className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
                   >
                     {botJoining ? "Entrando…" : botId ? "Bot na reunião" : "Entrar na reunião com o bot"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void joinMeetingWithAvatar()}
+                    disabled={botJoining || !!botId}
+                    title="Cria o bot com output_media apontando para a página pública /meet"
+                    className="rounded-md bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground disabled:opacity-50"
+                  >
+                    {botJoining ? "Entrando…" : "Entrar com avatar no Meet (Camada 3)"}
                   </button>
                   {botId && (
                     <button

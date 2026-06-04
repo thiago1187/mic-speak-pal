@@ -2,7 +2,16 @@ import { createServerFn } from "@tanstack/react-start";
 
 const RECALL_BASE = "https://us-west-2.recall.ai/api/v1";
 
-type CreateBotInput = { apiKey: string; meetingUrl: string; botName?: string };
+// outputMediaUrl (CAMADA 3): quando presente, o Recall renderiza essa página
+// pública num navegador na nuvem dele e transmite o áudio+vídeo dela como
+// câmera+microfone do bot dentro da reunião (o avatar fala DENTRO do Meet).
+// Sem outputMediaUrl, o comportamento é idêntico ao das Camadas 1/2.
+type CreateBotInput = {
+  apiKey: string;
+  meetingUrl: string;
+  botName?: string;
+  outputMediaUrl?: string;
+};
 
 export const recallCreateBot = createServerFn({ method: "POST" })
   .inputValidator((data: CreateBotInput) => {
@@ -11,7 +20,7 @@ export const recallCreateBot = createServerFn({ method: "POST" })
     return data;
   })
   .handler(async ({ data }) => {
-    const body = {
+    const body: Record<string, unknown> = {
       meeting_url: data.meetingUrl,
       bot_name: data.botName || "Renante",
       recording_config: {
@@ -20,6 +29,14 @@ export const recallCreateBot = createServerFn({ method: "POST" })
         },
       },
     };
+    if (data.outputMediaUrl) {
+      body.output_media = {
+        camera: {
+          kind: "webpage",
+          config: { url: data.outputMediaUrl },
+        },
+      };
+    }
     const res = await fetch(`${RECALL_BASE}/bot/`, {
       method: "POST",
       headers: {
