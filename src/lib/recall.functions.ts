@@ -40,6 +40,19 @@ export const recallCreateBot = createServerFn({ method: "POST" })
       // A máquina padrão do bot derruba frames → trava. Sobe pra uma maior só aqui
       // (Camada 3). Camadas 1/2 não usam output_media e seguem na máquina padrão.
       body.variant = { google_meet: "web_4_core" };
+      // Transcrição REALTIME do próprio Recall (não depende do CC do Meet estar
+      // ligado, ao contrário do meeting_captions). É isso que alimenta o WebSocket
+      // que a página /meet escuta → faz o avatar "ouvir" a reunião.
+      body.recording_config = {
+        transcript: {
+          provider: {
+            recallai_streaming: {
+              mode: "prioritize_low_latency",
+              language_code: "pt",
+            },
+          },
+        },
+      };
     }
     const res = await fetch(`${RECALL_BASE}/bot/`, {
       method: "POST",
