@@ -12,4 +12,20 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Habilita o plugin de deploy do nitro também fora do sandbox do Lovable (ex.: Vercel).
+  // O preset vem de NITRO_PRESET; default cloudflare-module mantém o Lovable intacto.
+  // Para Vercel, rode o build com NITRO_PRESET=vercel (gera .vercel/output).
+  // O config do Lovable força output.dir=dist; no preset vercel sobrescrevemos
+  // de volta pro layout do Build Output API que o Vercel espera.
+  nitro:
+    process.env.NITRO_PRESET === "vercel"
+      ? {
+          preset: "vercel",
+          output: {
+            dir: ".vercel/output",
+            serverDir: ".vercel/output/functions/__nitro.func",
+            publicDir: ".vercel/output/static",
+          },
+        }
+      : { preset: process.env.NITRO_PRESET ?? "cloudflare-module" },
 });
