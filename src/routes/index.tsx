@@ -1154,14 +1154,37 @@ function Index() {
                   {!speechSupported
                     ? "Sem suporte a voz"
                     : muted
-                      ? "Microfone mutado"
-                      : listening
-                        ? "Ouvindo..."
-                        : avatarSpeaking
-                          ? "Avatar falando (mic pausado)"
-                          : "Aguardando fala"}
+                      ? "Mic desligado"
+                      : avatarSpeaking
+                        ? "Avatar falando"
+                        : mode === "reuniao" && !meetingActive
+                          ? 'Dormindo (diga "Renante")'
+                          : mode === "reuniao" && meetingActive
+                            ? "Sessão ativa"
+                            : listening
+                              ? "Ouvindo..."
+                              : "Aguardando fala"}
                 </div>
               </div>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <button
+                onClick={interruptAvatar}
+                disabled={!connected}
+                className="rounded-md bg-destructive px-4 py-3 text-sm font-semibold text-destructive-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                title="Atalho: barra de espaço"
+              >
+                ⏹️ Interromper (espaço)
+              </button>
+              <label className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={bargeIn}
+                  onChange={(e) => setBargeIn(e.target.checked)}
+                />
+                Permitir interromper falando
+              </label>
             </div>
 
             <div className="grid gap-2 md:grid-cols-2">
