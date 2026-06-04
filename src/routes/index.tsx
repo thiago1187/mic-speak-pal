@@ -1082,6 +1082,83 @@ function Index() {
     return () => window.removeEventListener("keydown", onKey);
   }, [interruptAvatar]);
 
+  // Auto-open Meet overlay when avatar connects
+  useEffect(() => {
+    if (connected) setMeetOpen(true);
+  }, [connected]);
+
+  // Mirror avatar video stream into overlay <video>
+  useEffect(() => {
+    if (!meetOpen) return;
+    const id = window.setInterval(() => {
+      const src = videoRef.current?.srcObject ?? null;
+      const dst = meetVideoRef.current;
+      if (dst && dst.srcObject !== src) {
+        dst.srcObject = src as MediaStream | null;
+        if (src) dst.play?.().catch(() => {});
+      }
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [meetOpen]);
+
+  // Attach local camera stream to preview video
+  useEffect(() => {
+    const v = camVideoRef.current;
+    if (v && camStreamRef.current) {
+      v.srcObject = camStreamRef.current;
+      v.play?.().catch(() => {});
+    }
+  }, [camOn, meetOpen]);
+
+  const toggleCamera = useCallback(async () => {
+    if (camOn) {
+      camStreamRef.current?.getTracks().forEach((t) => t.stop());
+      camStreamRef.current = null;
+      setCamOn(false);
+      setCamError(null);
+      log("Câmera desligada");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      camStreamRef.current = stream;
+      setCamOn(true);
+      setCamError(null);
+      log("Câmera ligada", "ok");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      setCamError(msg);
+      logError("getUserMedia(video) falhou", err);
+    }
+  }, [camOn, log, logError]);
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      logError("fullscreen falhou", err);
+    }
+  }, [logError]);
+
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+
+
 
 
   const testAvatar = useCallback(async () => {
