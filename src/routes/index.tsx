@@ -536,16 +536,21 @@ function Index() {
       log(`SpeechRecognition onaudioend: ${safeStringify(event)}`);
     };
     rec.onerror = (event: any) => {
-      const details = `error=${event?.error ?? "desconhecido"} message=${event?.message ?? ""} raw=${safeStringify(event)}`;
+      const err = event?.error ?? "desconhecido";
+      const details = `error=${err} message=${event?.message ?? ""} raw=${safeStringify(event)}`;
       log(`SpeechRecognition onerror: ${details}`, "err");
-      if (event?.error === "not-allowed" || event?.error === "service-not-allowed") {
+      setMicLastError(`${err}${event?.message ? ` — ${event.message}` : ""}`);
+      if (err === "not-allowed" || err === "service-not-allowed") {
         isMutedRef.current = true;
         shouldListenRef.current = false;
         setMuted(true);
+        setMicState("erro");
         setStatus("microphone", "err", `Permissão negada — use o campo de texto: ${details}`);
-      } else if (event?.error === "no-speech") {
+      } else if (err === "no-speech") {
+        // Não é erro real, apenas silêncio. Mantém estado "ouvindo".
         setStatus("microphone", "waiting", `Nenhuma fala detectada: ${details}`);
-      } else if (event?.error === "network" || event?.error === "aborted") {
+      } else if (err === "network" || err === "aborted" || err === "audio-capture") {
+        setMicState("erro");
         setStatus("microphone", "err", `Erro de reconhecimento: ${details}`);
       }
     };
