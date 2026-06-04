@@ -17,11 +17,61 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const FILLER_WEBHOOK = "https://n8n.srv1435894.hstgr.cloud/webhook/filler";
-const RENANTE_WEBHOOK =
-  "https://n8n.srv1435894.hstgr.cloud/webhook/c32e3b52-1d99-483f-8da7-c2b2f981687b";
-const SESSION_ID = "teste-voz-001";
 const SPEAK_TIMEOUT_MS = 60_000;
+const SETTINGS_KEY = "liveavatar.settings.v1";
+const MODE_KEY = "liveavatar.mode.v1";
+
+type Mode = "conversa" | "reuniao" | "entrevistador";
+const MODES: { id: Mode; label: string }[] = [
+  { id: "conversa", label: "Conversa" },
+  { id: "reuniao", label: "Reunião" },
+  { id: "entrevistador", label: "Entrevistador" },
+];
+
+type Settings = {
+  webhookConversa: string;
+  webhookReuniao: string;
+  webhookEntrevistador: string;
+  webhookFiller: string;
+  apiKey: string;
+  avatarId: string;
+  voiceId: string;
+  contextId: string;
+  language: string;
+  meetLink: string;
+  recallApiKey: string;
+};
+
+const DEFAULT_SETTINGS: Settings = {
+  webhookConversa: "https://n8n.srv1435894.hstgr.cloud/webhook/c32e3b52-1d99-483f-8da7-c2b2f981687b",
+  webhookReuniao: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-reuniao",
+  webhookEntrevistador: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-entrevistador",
+  webhookFiller: "https://n8n.srv1435894.hstgr.cloud/webhook/filler",
+  apiKey: "33003367-5918-11f1-8d28-066a7fa2e369",
+  avatarId: "17593eee-5774-419c-9923-64694d710c57",
+  voiceId: "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098",
+  contextId: "620eb98d-45ae-4a6c-9971-2c0915b4c279",
+  language: "pt",
+  meetLink: "",
+  recallApiKey: "",
+};
+
+function loadSettings(): Settings {
+  if (typeof window === "undefined") return DEFAULT_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function loadMode(): Mode {
+  if (typeof window === "undefined") return "conversa";
+  const v = window.localStorage.getItem(MODE_KEY) as Mode | null;
+  return v === "conversa" || v === "reuniao" || v === "entrevistador" ? v : "conversa";
+}
 
 type LogEntry = { t: number; msg: string; kind?: "info" | "err" | "ok" };
 type StatusKind = "waiting" | "ok" | "err";
@@ -136,6 +186,43 @@ function Index() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
   const [text, setText] = useState("");
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [mode, setMode] = useState<Mode>("conversa");
+  const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
+  const modeRef = useRef<Mode>("conversa");
+
+  useEffect(() => {
+    const s = loadSettings();
+    const m = loadMode();
+    setSettings(s);
+    setSettingsDraft(s);
+    setMode(m);
+    settingsRef.current = s;
+    modeRef.current = m;
+  }, []);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+    if (typeof window !== "undefined") window.localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
+
+  const saveSettings = useCallback(() => {
+    setSettings(settingsDraft);
+    settingsRef.current = settingsDraft;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settingsDraft));
+    }
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 1800);
+  }, [settingsDraft]);
+
   const [liveTranscript, setLiveTranscript] = useState("");
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -583,7 +670,16 @@ function Index() {
     setWebrtcState("conectando");
     try {
       log("Obtendo session_token via função de backend...");
-      const tokenResult = await fetchToken();
+      const s = settingsRef.current;
+      const tokenResult = await fetchToken({
+        data: {
+          apiKey: s.apiKey,
+          avatarId: s.avatarId,
+          voiceId: s.voiceId,
+          contextId: s.contextId,
+          language: s.language,
+        },
+      });
       log(
         `Resposta completa token: HTTP ${tokenResult.token_http_status}\n${tokenResult.token_response_body}`,
         "ok",
@@ -707,36 +803,47 @@ function Index() {
       }
       setText("");
       setLiveTranscript("");
-      log(`enviando pergunta: ${question}`);
+      const s = settingsRef.current;
+      const currentMode = modeRef.current;
+      const renanteUrl =
+        currentMode === "conversa"
+          ? s.webhookConversa
+          : currentMode === "reuniao"
+            ? s.webhookReuniao
+            : s.webhookEntrevistador;
+      const useFiller = currentMode !== "entrevistador";
+      log(`enviando pergunta (modo=${currentMode}): ${question}`);
 
-      const fillerP = fetch(FILLER_WEBHOOK, {
+      const fillerP = useFiller
+        ? fetch(s.webhookFiller, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question }),
+          })
+            .then(async (response) => {
+              const body = await response.text();
+              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
+              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
+              try {
+                return JSON.parse(body);
+              } catch {
+                return { filler: body };
+              }
+            })
+            .catch((error) => {
+              logError("erro filler", error);
+              return { filler: "" };
+            })
+        : Promise.resolve({ filler: "" });
+
+      const renanteP = fetch(renanteUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, sessionId: currentMode }),
       })
         .then(async (response) => {
           const body = await response.text();
-          log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
-          if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
-          try {
-            return JSON.parse(body);
-          } catch {
-            return { filler: body };
-          }
-        })
-        .catch((error) => {
-          logError("erro filler", error);
-          return { filler: "" };
-        });
-
-      const renanteP = fetch(RENANTE_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, sessionId: SESSION_ID }),
-      })
-        .then(async (response) => {
-          const body = await response.text();
-          log(`Webhook Renante: HTTP ${response.status} ${response.statusText}\n${body}`);
+          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${body}`);
           if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${body}`);
           try {
             return JSON.parse(body);
@@ -751,16 +858,21 @@ function Index() {
 
       const fillerJson: any = await fillerP;
       const fillerText = (fillerJson?.filler ?? "").toString().trim();
-      log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
+      if (useFiller) {
+        log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
+      } else {
+        log("modo entrevistador — filler desligado");
+      }
       if (fillerText) {
         try {
           await speakAndWait(fillerText);
         } catch (error) {
           logError("erro speak_text filler", error);
         }
-      } else {
+      } else if (useFiller) {
         log("filler vazio — pulando direto pra resposta");
       }
+
 
       const renanteJson: any = await renanteP;
       const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
@@ -804,9 +916,39 @@ function Index() {
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
         <div className="mx-auto flex max-w-6xl flex-col gap-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h1 className="text-xl font-semibold md:text-2xl">Diagnóstico LiveAvatar + Voz</h1>
-            <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
+            <h1 className="text-xl font-semibold md:text-2xl">HeyGen LiveAvatar — Renante</h1>
+            <div className="flex items-center gap-3">
+              <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
+              <button
+                onClick={() => {
+                  setSettingsDraft(settings);
+                  setSettingsOpen(true);
+                }}
+                className="rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
+                aria-label="Configurações"
+                title="Configurações"
+              >
+                ⚙️ Configurações
+              </button>
+            </div>
           </div>
+
+          <div className="flex flex-wrap gap-2">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMode(m.id)}
+                className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
+                  mode === m.id
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-foreground hover:bg-muted"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid gap-2 md:grid-cols-4">
             {(Object.keys(statuses) as StatusKey[]).map((key) => (
               <div
@@ -826,6 +968,7 @@ function Index() {
             ))}
           </div>
         </div>
+
       </div>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-4 p-4 md:p-8">
@@ -985,6 +1128,120 @@ function Index() {
           </aside>
         </section>
       </main>
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-4 backdrop-blur">
+          <div className="my-8 w-full max-w-2xl rounded-lg border border-border bg-card p-6 text-card-foreground shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Configurações</h2>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-md border border-border px-3 py-1 text-sm hover:bg-muted"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="space-y-5">
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Webhooks n8n
+                </legend>
+                {(
+                  [
+                    ["webhookConversa", "Webhook Conversa"],
+                    ["webhookReuniao", "Webhook Reunião"],
+                    ["webhookEntrevistador", "Webhook Entrevistador"],
+                    ["webhookFiller", "Webhook Filler"],
+                  ] as [keyof Settings, string][]
+                ).map(([key, label]) => (
+                  <label key={key} className="block text-sm">
+                    <span className="mb-1 block font-medium">{label}</span>
+                    <input
+                      value={settingsDraft[key]}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Avatar (LiveAvatar)
+                </legend>
+                {(
+                  [
+                    ["apiKey", "API Key"],
+                    ["avatarId", "avatar_id"],
+                    ["voiceId", "voice_id"],
+                    ["contextId", "context_id"],
+                    ["language", "idioma"],
+                  ] as [keyof Settings, string][]
+                ).map(([key, label]) => (
+                  <label key={key} className="block text-sm">
+                    <span className="mb-1 block font-medium">{label}</span>
+                    <input
+                      value={settingsDraft[key]}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset className="space-y-3">
+                <legend className="text-sm font-semibold uppercase text-muted-foreground">
+                  Google Meet / Recall (opcional)
+                </legend>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">Link do Google Meet</span>
+                  <input
+                    value={settingsDraft.meetLink}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, meetLink: e.target.value }))
+                    }
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">Recall API Key</span>
+                  <input
+                    value={settingsDraft.recallApiKey}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, recallApiKey: e.target.value }))
+                    }
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                </label>
+              </fieldset>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveSettings}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+                >
+                  Salvar
+                </button>
+                <button
+                  onClick={() => setSettingsDraft(DEFAULT_SETTINGS)}
+                  className="rounded-md border border-border px-4 py-2 text-sm"
+                >
+                  Restaurar padrões
+                </button>
+                {settingsSaved && (
+                  <span className="text-sm font-medium text-status-ok">Salvo!</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
   );
 }
