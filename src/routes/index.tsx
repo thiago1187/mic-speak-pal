@@ -235,6 +235,26 @@ function Index() {
   const [speechSupported, setSpeechSupported] = useState(true);
   const [showStartMediaButton, setShowStartMediaButton] = useState(false);
   const [webrtcState, setWebrtcState] = useState("aguardando");
+  const [bargeIn, setBargeIn] = useState(false);
+  const [meetingActive, setMeetingActive] = useState(false);
+
+  useEffect(() => {
+    bargeInRef.current = bargeIn;
+  }, [bargeIn]);
+
+  // Espelha estado da Reunião pra UI; meetingActiveRef é a fonte da verdade.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setMeetingActive((v) => (v !== meetingActiveRef.current ? meetingActiveRef.current : v));
+    }, 400);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Ao trocar de modo, reseta o estado DORMINDO da Reunião.
+  useEffect(() => {
+    meetingActiveRef.current = false;
+    setMeetingActive(false);
+  }, [mode]);
 
   const log = useCallback((msg: string, kind: LogEntry["kind"] = "info") => {
     const line = `${new Date().toISOString()} ${msg}`;
