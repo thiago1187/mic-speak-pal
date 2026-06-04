@@ -916,9 +916,39 @@ function Index() {
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
         <div className="mx-auto flex max-w-6xl flex-col gap-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h1 className="text-xl font-semibold md:text-2xl">Diagnóstico LiveAvatar + Voz</h1>
-            <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
+            <h1 className="text-xl font-semibold md:text-2xl">HeyGen LiveAvatar — Renante</h1>
+            <div className="flex items-center gap-3">
+              <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
+              <button
+                onClick={() => {
+                  setSettingsDraft(settings);
+                  setSettingsOpen(true);
+                }}
+                className="rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
+                aria-label="Configurações"
+                title="Configurações"
+              >
+                ⚙️ Configurações
+              </button>
+            </div>
           </div>
+
+          <div className="flex flex-wrap gap-2">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMode(m.id)}
+                className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
+                  mode === m.id
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-foreground hover:bg-muted"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid gap-2 md:grid-cols-4">
             {(Object.keys(statuses) as StatusKey[]).map((key) => (
               <div
@@ -938,6 +968,7 @@ function Index() {
             ))}
           </div>
         </div>
+
       </div>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-4 p-4 md:p-8">
