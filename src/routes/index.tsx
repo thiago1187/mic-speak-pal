@@ -2381,20 +2381,12 @@ function Index() {
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                   <button
                     type="button"
-                    onClick={() => void joinMeetingWithBot()}
-                    disabled={botJoining || !!botId}
-                    className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-                  >
-                    {botJoining ? "Entrando…" : botId ? "Bot na reunião" : "Entrar na reunião com o bot"}
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => void joinMeetingWithAvatar()}
                     disabled={botJoining || !!botId}
-                    title="Cria o bot com output_media apontando para a página pública /meet"
-                    className="rounded-md bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground disabled:opacity-50"
+                    title="Coloca o avatar Renante como participante (câmera + voz) dentro do Meet"
+                    className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
                   >
-                    {botJoining ? "Entrando…" : "Entrar com avatar no Meet (Camada 3)"}
+                    {botJoining ? "Entrando…" : botId ? "Avatar na reunião" : "Entrar na reunião com o avatar"}
                   </button>
                   <button
                     type="button"

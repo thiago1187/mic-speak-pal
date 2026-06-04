@@ -47,7 +47,9 @@ export const recallCreateBot = createServerFn({ method: "POST" })
         transcript: {
           provider: {
             recallai_streaming: {
-              mode: "prioritize_low_latency",
+              // low_latency só suporta inglês; pra PT usamos accuracy (ainda é
+              // streaming/realtime, só prioriza acerto em vez de latência mínima).
+              mode: "prioritize_accuracy",
               language_code: "pt",
             },
           },
