@@ -670,7 +670,16 @@ function Index() {
     setWebrtcState("conectando");
     try {
       log("Obtendo session_token via função de backend...");
-      const tokenResult = await fetchToken();
+      const s = settingsRef.current;
+      const tokenResult = await fetchToken({
+        data: {
+          apiKey: s.apiKey,
+          avatarId: s.avatarId,
+          voiceId: s.voiceId,
+          contextId: s.contextId,
+          language: s.language,
+        },
+      });
       log(
         `Resposta completa token: HTTP ${tokenResult.token_http_status}\n${tokenResult.token_response_body}`,
         "ok",
