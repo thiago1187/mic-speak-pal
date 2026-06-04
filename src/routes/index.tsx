@@ -1751,6 +1751,163 @@ function Index() {
         </section>
       </main>
 
+      {meetOpen && (
+        <div className="fixed inset-0 z-40 flex flex-col bg-black text-white">
+          {/* Top bar */}
+          <div className="flex items-center justify-between px-4 py-2 text-xs text-white/70">
+            <div className="flex items-center gap-3">
+              <span className="font-semibold text-white">Renante · Reunião</span>
+              <span>WebRTC: {webrtcState}</span>
+              {avatarSpeaking && <span className="rounded bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">falando…</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setMode(m.id)}
+                  className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                    mode === m.id ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Stage */}
+          <div className="relative flex-1 overflow-hidden">
+            <video
+              ref={meetVideoRef}
+              autoPlay
+              playsInline
+              className="h-full w-full object-contain bg-black"
+            />
+
+            {/* Local camera PiP */}
+            {camOn && (
+              <div className="absolute bottom-4 right-4 h-36 w-52 overflow-hidden rounded-lg border border-white/20 bg-black shadow-xl md:h-44 md:w-64">
+                <video
+                  ref={camVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="h-full w-full object-cover [transform:scaleX(-1)]"
+                />
+                <div className="absolute bottom-1 left-2 text-[10px] text-white/80">Você</div>
+              </div>
+            )}
+
+            {camError && (
+              <div className="absolute left-4 top-4 max-w-sm rounded-md bg-destructive/90 px-3 py-2 text-xs text-destructive-foreground">
+                Câmera indisponível: {camError}
+              </div>
+            )}
+
+            {/* Collapsible log */}
+            <div className="absolute left-4 top-4 max-w-sm">
+              <button
+                onClick={() => setLogCollapsed((v) => !v)}
+                className="rounded-md bg-white/10 px-2 py-1 text-[11px] text-white/80 hover:bg-white/20"
+              >
+                {logCollapsed ? "▸ log" : "▾ log"}
+              </button>
+              {!logCollapsed && (
+                <div className="mt-2 max-h-64 w-80 overflow-auto rounded-md bg-black/70 p-2 font-mono text-[10px] leading-snug text-white/80">
+                  {logs.slice(-40).map((entry, i) => (
+                    <div key={`${entry.t}-${i}`} className={entry.kind === "err" ? "text-red-300" : ""}>
+                      [{new Date(entry.t).toLocaleTimeString()}] {entry.msg}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Live transcript caption */}
+            {(liveTranscript || micLastInterim) && (
+              <div className="pointer-events-none absolute bottom-28 left-1/2 max-w-3xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white">
+                {liveTranscript || micLastInterim}
+              </div>
+            )}
+          </div>
+
+          {/* Text fallback */}
+          <div className="flex items-center gap-2 border-t border-white/10 bg-black/60 px-4 py-2">
+            <input
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setLiveTranscript(e.target.value);
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
+              placeholder="Digite uma mensagem (fallback)…"
+              className="min-w-0 flex-1 rounded-md border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/40"
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={!connected || !text.trim()}
+              className="rounded-md bg-white px-3 py-2 text-sm font-medium text-black disabled:opacity-40"
+            >
+              Enviar
+            </button>
+          </div>
+
+          {/* Control bar */}
+          <div className="flex items-center justify-center gap-3 border-t border-white/10 bg-black/80 px-4 py-4">
+            <button
+              onClick={toggleMute}
+              disabled={!speechSupported}
+              title={muted ? "Ativar microfone" : "Mutar microfone"}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
+                muted ? "bg-destructive text-destructive-foreground" : "bg-white/15 text-white hover:bg-white/25"
+              } disabled:opacity-40`}
+            >
+              {muted ? "🎙️" : "🎤"}
+            </button>
+            <button
+              onClick={toggleCamera}
+              title={camOn ? "Desligar câmera" : "Ligar câmera"}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
+                camOn ? "bg-white/15 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
+              }`}
+            >
+              {camOn ? "📹" : "📷"}
+            </button>
+            <button
+              onClick={interruptAvatar}
+              disabled={!connected}
+              title="Interromper fala (espaço)"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25 disabled:opacity-40"
+            >
+              ⏹
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25"
+            >
+              {isFullscreen ? "🗗" : "⛶"}
+            </button>
+            <button
+              onClick={() => setMeetOpen(false)}
+              title="Minimizar"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25"
+            >
+              ⤓
+            </button>
+            <button
+              onClick={() => { void stopSession(); }}
+              title="Sair da reunião"
+              className="ml-2 flex h-12 items-center justify-center gap-2 rounded-full bg-destructive px-5 text-sm font-semibold text-destructive-foreground hover:opacity-90"
+            >
+              ☎ Sair
+            </button>
+          </div>
+        </div>
+      )}
+
+
+
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-4 backdrop-blur">
           <div className="my-8 w-full max-w-2xl rounded-lg border border-border bg-card p-6 text-card-foreground shadow-xl">
