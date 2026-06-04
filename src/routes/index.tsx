@@ -454,6 +454,8 @@ function Index() {
       resultSinceStartRef.current = false;
       finalTranscriptRef.current = "";
       setListening(true);
+      setMicState("ouvindo");
+      setMicLastError("");
       setStatus(
         "microphone",
         micPermissionGrantedRef.current ? "ok" : "waiting",
