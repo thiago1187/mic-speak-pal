@@ -179,6 +179,9 @@ function StatusDot({ state }: { state: StatusKind }) {
 
 function Index() {
   const fetchToken = useServerFn(getSessionToken);
+  const callCreateBot = useServerFn(recallCreateBot);
+  const callGetTranscript = useServerFn(recallGetTranscript);
+  const callLeaveBot = useServerFn(recallLeaveBot);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
