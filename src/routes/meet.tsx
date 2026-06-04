@@ -50,6 +50,7 @@ type Cfg = {
   greeting: string; // fala inicial ao entrar (vazio = não fala)
   meetMode: "wake" | "always"; // wake = só após o nome; always = responde tudo
   bargeIn: boolean; // permitir interromper a fala dele falando por cima
+  sid: string; // sessionId enviado ao webhook (= modo: conversa/reuniao/entrevistador)
 };
 
 function readConfig(): Cfg {
@@ -68,6 +69,7 @@ function readConfig(): Cfg {
     greeting: q.get("greeting") ?? "",
     meetMode: q.get("mmode") === "always" ? "always" : "wake",
     bargeIn: q.get("barge") === "1",
+    sid: q.get("sid") || "reuniao",
   };
 }
 
@@ -153,12 +155,15 @@ function MeetAvatar() {
     [log, waitForAvatarEnd],
   );
 
-  // ---- envio pro n8n (Reunião) com FILLER INSTANTÂNEO ----
+  // ---- envio pro n8n com FILLER INSTANTÂNEO (webhook = o do modo escolhido) ----
   const handleSend = useCallback(
     async (question: string, responder: boolean) => {
       const s = cfgRef.current;
-      const body = { question, sessionId: "reuniao", responder };
-      log(`→ webhook Reunião (responder=${responder}): "${question}"`);
+      // sessionId = o modo (conversa/reuniao/entrevistador). `responder` só faz
+      // sentido no modo "wake" (Reunião); nos outros o avatar sempre responde.
+      const body: Record<string, unknown> = { question, sessionId: s.sid };
+      if (s.meetMode === "wake") body.responder = responder;
+      log(`→ webhook ${s.sid} (responder=${responder}): "${question}"`);
 
       const sendTs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
@@ -498,8 +503,18 @@ function MeetAvatar() {
         // Fala inicial configurada (se houver). A própria voz é ignorada na rota.
         const greeting = (cfg.greeting ?? "").trim();
         if (greeting) {
+          // SUBSTITUI a saudação automática do HeyGen: interrompe o que ele começar
+          // a falar sozinho (repete algumas vezes pra pegar o auto-greeting que às
+          // vezes começa com pequeno atraso) e então fala a SUA saudação.
+          for (let i = 0; i < 4 && !cancelled; i++) {
+            try {
+              (sessionRef.current as any)?.interrupt?.();
+            } catch {}
+            await new Promise((r) => window.setTimeout(r, 250));
+          }
+          if (cancelled) return;
           try {
-            log(`fala inicial: "${greeting}"`, "ok");
+            log(`fala inicial (substitui a do HeyGen): "${greeting}"`, "ok");
             await speakAndWait(greeting);
           } catch (e: any) {
             log(`erro fala inicial: ${e?.message ?? e}`, "err");

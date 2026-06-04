@@ -47,11 +47,18 @@ type Settings = {
   avatarBaseUrl: string;
   // Comportamento do avatar DENTRO do Google Meet (Camada 3). No Meet não há
   // botões/atalhos, então tudo é configurado aqui e embutido no bot ao entrar.
-  meetGreeting: string; // fala inicial ao entrar (vazio = não fala nada)
-  meetMode: "wake" | "always"; // "wake" = só responde após chamar o nome; "always" = responde tudo
-  meetBargeIn: boolean; // permitir interromper a fala dele falando por cima
+  // Há uma config independente POR MODO (Conversa/Reunião/Entrevistador), e você
+  // escolhe com qual subir. Cada modo usa o webhook n8n do seu próprio modo.
+  meetLaunchMode: Mode; // qual modo usar ao entrar no Meet
+  meetConfigs: Record<Mode, MeetModeConfig>;
   meetDebug: boolean; // mostra diagnóstico (status do WebSocket) na câmera do bot
   entrevistadorSilenceSec: number; // pausa de silêncio (s) antes de fechar a fala no Entrevistador
+};
+
+type MeetModeConfig = {
+  greeting: string; // fala inicial ao entrar (vazio = não fala nada)
+  behavior: "wake" | "always"; // "wake" = só responde após o nome; "always" = responde tudo
+  bargeIn: boolean; // permitir interromper a fala dele falando por cima
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -67,9 +74,24 @@ const DEFAULT_SETTINGS: Settings = {
   meetLink: "",
   recallApiKey: "",
   avatarBaseUrl: "",
-  meetGreeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
-  meetMode: "wake",
-  meetBargeIn: false,
+  meetLaunchMode: "reuniao",
+  meetConfigs: {
+    conversa: {
+      greeting: "Olá! Eu sou o Renante, da Gravidade Zero. Podem falar comigo à vontade.",
+      behavior: "always",
+      bargeIn: false,
+    },
+    reuniao: {
+      greeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
+      behavior: "wake",
+      bargeIn: false,
+    },
+    entrevistador: {
+      greeting: "Oi! Eu sou o Renante e vou conduzir essa conversa. Podem responder quando quiserem.",
+      behavior: "always",
+      bargeIn: false,
+    },
+  },
   meetDebug: false,
   entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
 };
@@ -79,7 +101,16 @@ function loadSettings(): Settings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    const merged: Settings = { ...DEFAULT_SETTINGS, ...parsed };
+    // Garante que meetConfigs tenha os 3 modos (compat com configs antigas).
+    const pc = parsed?.meetConfigs ?? {};
+    merged.meetConfigs = {
+      conversa: { ...DEFAULT_SETTINGS.meetConfigs.conversa, ...(pc.conversa ?? {}) },
+      reuniao: { ...DEFAULT_SETTINGS.meetConfigs.reuniao, ...(pc.reuniao ?? {}) },
+      entrevistador: { ...DEFAULT_SETTINGS.meetConfigs.entrevistador, ...(pc.entrevistador ?? {}) },
+    };
+    return merged;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -89,6 +120,35 @@ function loadMode(): Mode {
   if (typeof window === "undefined") return "conversa";
   const v = window.localStorage.getItem(MODE_KEY) as Mode | null;
   return v === "conversa" || v === "reuniao" || v === "entrevistador" ? v : "conversa";
+}
+
+// Monta a URL pública /meet com a config do MODO escolhido pra subir no Meet.
+// Cada modo usa o webhook n8n do seu próprio modo; o filler é global.
+function buildMeetUrl(s: Settings, debug: boolean): string {
+  const m = s.meetLaunchMode;
+  const cfg = s.meetConfigs[m];
+  const wr =
+    m === "conversa"
+      ? s.webhookConversa
+      : m === "entrevistador"
+        ? s.webhookEntrevistador
+        : s.webhookReuniao;
+  const base = s.avatarBaseUrl.replace(/\/+$/, "");
+  const qs = new URLSearchParams({
+    apiKey: s.apiKey,
+    avatarId: s.avatarId,
+    voiceId: s.voiceId,
+    contextId: s.contextId,
+    language: s.language,
+    wr,
+    wf: s.webhookFiller,
+    sid: m,
+    greeting: cfg.greeting,
+    mmode: cfg.behavior,
+    barge: cfg.bargeIn ? "1" : "0",
+    debug: debug ? "1" : "0",
+  });
+  return `${base}/meet?${qs.toString()}`;
 }
 
 type LogEntry = { t: number; msg: string; kind?: "info" | "err" | "ok" };
@@ -1268,24 +1328,11 @@ function Index() {
     if (!s.avatarBaseUrl) { log('Camada 3: "URL pública do avatar" vazia. Publique no Lovable e cole a URL base em Configurações.', "err"); return; }
     if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
     setBotJoining(true);
-    setBotStatus("entrando (avatar)…");
+    const launchMode = s.meetLaunchMode;
+    setBotStatus(`entrando (${launchMode})…`);
     avatarInMeetRef.current = true; // a página /meet fala por si; suprime fala local
-    const base = s.avatarBaseUrl.replace(/\/+$/, "");
-    const qs = new URLSearchParams({
-      apiKey: s.apiKey,
-      avatarId: s.avatarId,
-      voiceId: s.voiceId,
-      contextId: s.contextId,
-      language: s.language,
-      wr: s.webhookReuniao,
-      wf: s.webhookFiller,
-      greeting: s.meetGreeting,
-      mmode: s.meetMode,
-      barge: s.meetBargeIn ? "1" : "0",
-      debug: s.meetDebug ? "1" : "0",
-    });
-    const outputMediaUrl = `${base}/meet?${qs.toString()}`;
-    log(`[CAMADA 3] Recall POST /bot/ com output_media → ${base}/meet`);
+    const outputMediaUrl = buildMeetUrl(s, s.meetDebug);
+    log(`[CAMADA 3] Recall POST /bot/ (modo=${launchMode}) com output_media → ${s.avatarBaseUrl.replace(/\/+$/, "")}/meet`);
     try {
       const r: any = await callCreateBot({
         data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante", outputMediaUrl },
@@ -1320,24 +1367,23 @@ function Index() {
       log('Teste: "URL pública do avatar" vazia (Configurações).', "err");
       return;
     }
-    const base = s.avatarBaseUrl.replace(/\/+$/, "");
-    const qs = new URLSearchParams({
-      apiKey: s.apiKey,
-      avatarId: s.avatarId,
-      voiceId: s.voiceId,
-      contextId: s.contextId,
-      language: s.language,
-      wr: s.webhookReuniao,
-      wf: s.webhookFiller,
-      greeting: s.meetGreeting,
-      mmode: s.meetMode,
-      barge: s.meetBargeIn ? "1" : "0",
-      debug: "1",
-    });
-    const url = `${base}/meet?${qs.toString()}`;
-    log(`Teste: abrindo página do avatar em nova aba (?debug=1)`);
+    const url = buildMeetUrl(s, true); // sempre com debug no teste visual
+    log(`Teste: abrindo página do avatar (modo=${s.meetLaunchMode}) em nova aba (?debug=1)`);
     window.open(url, "_blank", "noopener");
   }, [log]);
+
+  // Troca o modo de entrada no Meet IMEDIATAMENTE (salvo), pra o botão de entrar usar.
+  const setLaunchModeNow = useCallback((m: Mode) => {
+    setSettings((prev) => {
+      const next = { ...prev, meetLaunchMode: m };
+      settingsRef.current = next;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+    setSettingsDraft((d) => ({ ...d, meetLaunchMode: m }));
+  }, []);
 
   const leaveMeetingWithBot = useCallback(async () => {
     const s = settingsRef.current;
@@ -2419,60 +2465,58 @@ function Index() {
                   </div>
                   <p className="mb-3 text-xs text-muted-foreground">
                     No Meet não há botões — tudo é por voz e por estas configurações,
-                    aplicadas ao entrar.
+                    aplicadas ao entrar. Há uma config <strong>por modo</strong>; você
+                    escolhe com qual subir no botão de entrar. Cada modo usa o webhook n8n
+                    do seu próprio modo.
                   </p>
 
-                  <label className="mb-3 block text-sm">
-                    <span className="mb-1 block font-medium">Fala inicial (ao entrar)</span>
-                    <textarea
-                      value={settingsDraft.meetGreeting}
-                      onChange={(e) =>
-                        setSettingsDraft((d) => ({ ...d, meetGreeting: e.target.value }))
-                      }
-                      rows={2}
-                      placeholder="Ex.: Olá pessoal, eu sou o Renante. É só me chamar pelo nome."
-                      className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
-                    />
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      O que ele diz assim que entra. Deixe vazio para não falar nada ao entrar.
-                    </span>
-                  </label>
-
-                  <label className="mb-3 block text-sm">
-                    <span className="mb-1 block font-medium">Modo no Meet</span>
-                    <select
-                      value={settingsDraft.meetMode}
-                      onChange={(e) =>
-                        setSettingsDraft((d) => ({
-                          ...d,
-                          meetMode: e.target.value === "always" ? "always" : "wake",
-                        }))
-                      }
-                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
-                    >
-                      <option value="wake">Só quando chamado pelo nome (wake word)</option>
-                      <option value="always">Sempre ativo (responde tudo)</option>
-                    </select>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      "Wake word": começa dormindo, acorda ao ouvir "Renante" e dorme com
-                      "pode desligar". "Sempre ativo": responde toda fala da reunião.
-                    </span>
-                  </label>
-
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.meetBargeIn}
-                      onChange={(e) =>
-                        setSettingsDraft((d) => ({ ...d, meetBargeIn: e.target.checked }))
-                      }
-                    />
-                    Permitir interromper falando (barge-in)
-                  </label>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    Ligado: falar por cima interrompe a resposta dele. Desligado: ele
-                    ignora novas falas enquanto está falando (evita ouvir a própria voz).
-                  </span>
+                  {MODES.map((mm) => {
+                    const c = settingsDraft.meetConfigs[mm.id];
+                    const upd = (patch: Partial<MeetModeConfig>) =>
+                      setSettingsDraft((d) => ({
+                        ...d,
+                        meetConfigs: {
+                          ...d.meetConfigs,
+                          [mm.id]: { ...d.meetConfigs[mm.id], ...patch },
+                        },
+                      }));
+                    return (
+                      <div key={mm.id} className="mb-3 rounded-md border border-border bg-card p-3">
+                        <div className="mb-2 text-sm font-semibold">{mm.label}</div>
+                        <label className="mb-2 block text-sm">
+                          <span className="mb-1 block text-xs font-medium">Fala inicial (ao entrar)</span>
+                          <textarea
+                            value={c.greeting}
+                            onChange={(e) => upd({ greeting: e.target.value })}
+                            rows={2}
+                            placeholder="Deixe vazio para não falar nada ao entrar"
+                            className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
+                          />
+                        </label>
+                        <label className="mb-2 block text-sm">
+                          <span className="mb-1 block text-xs font-medium">Comportamento</span>
+                          <select
+                            value={c.behavior}
+                            onChange={(e) =>
+                              upd({ behavior: e.target.value === "always" ? "always" : "wake" })
+                            }
+                            className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                          >
+                            <option value="wake">Só quando chamado pelo nome (wake word)</option>
+                            <option value="always">Sempre ativo (responde tudo)</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={c.bargeIn}
+                            onChange={(e) => upd({ bargeIn: e.target.checked })}
+                          />
+                          Permitir interromper falando (barge-in)
+                        </label>
+                      </div>
+                    );
+                  })}
 
                   <label className="mt-3 flex items-center gap-2 text-sm">
                     <input
@@ -2490,6 +2534,21 @@ function Index() {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="font-medium">Entrar como:</span>
+                    <select
+                      value={settings.meetLaunchMode}
+                      onChange={(e) => setLaunchModeNow(e.target.value as Mode)}
+                      disabled={botJoining || !!botId}
+                      className="rounded-md border border-border bg-input px-2 py-2 text-sm disabled:opacity-50"
+                    >
+                      {MODES.map((mm) => (
+                        <option key={mm.id} value={mm.id}>
+                          {mm.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button
                     type="button"
                     onClick={() => void joinMeetingWithAvatar()}
@@ -2497,7 +2556,7 @@ function Index() {
                     title="Coloca o avatar Renante como participante (câmera + voz) dentro do Meet"
                     className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
                   >
-                    {botJoining ? "Entrando…" : botId ? "Avatar na reunião" : "Entrar na reunião com o avatar"}
+                    {botJoining ? "Entrando…" : botId ? "Avatar na reunião" : `Entrar na reunião (${settings.meetLaunchMode})`}
                   </button>
                   <button
                     type="button"
