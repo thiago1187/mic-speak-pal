@@ -253,6 +253,15 @@ function Index() {
   const [diagReport, setDiagReport] = useState("");
   const [diagCopied, setDiagCopied] = useState(false);
 
+  // Painel de diagnóstico de voz (sempre visível quando mic ligado)
+  type MicState = "desligado" | "pedindo permissão" | "ouvindo" | "erro";
+  const [micState, setMicState] = useState<MicState>("desligado");
+  const [micLastInterim, setMicLastInterim] = useState("");
+  const [micLastFinal, setMicLastFinal] = useState("");
+  const [micLastError, setMicLastError] = useState("");
+  const [micTestRemaining, setMicTestRemaining] = useState(0);
+  const micTestTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     bargeInRef.current = bargeIn;
   }, [bargeIn]);
@@ -322,9 +331,21 @@ function Index() {
 
   const requestMicrophonePermission = useCallback(async () => {
     log("getUserMedia({ audio: { EC/NS/AGC: true } }): solicitando permissão");
+    setMicState("pedindo permissão");
+    setMicLastError("");
+    if (!window.isSecureContext) {
+      const msg = "Contexto não seguro (precisa de HTTPS) para acessar o microfone.";
+      setStatus("microphone", "err", msg);
+      setMicState("erro");
+      setMicLastError(msg);
+      log(msg, "err");
+      return false;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       const message = "navigator.mediaDevices.getUserMedia não existe neste navegador";
       setStatus("microphone", "err", message);
+      setMicState("erro");
+      setMicLastError(message);
       log(message, "err");
       return false;
     }
@@ -345,11 +366,10 @@ function Index() {
       micPermissionGrantedRef.current = false;
       const formatted = formatError(error);
       const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
-      setStatus(
-        "microphone",
-        "err",
-        `${denied ? "Microfone negado" : "Erro no microfone"}: ${formatted}`,
-      );
+      const msg = `${denied ? "Microfone negado pelo navegador" : "Erro no microfone"}: ${formatted}`;
+      setStatus("microphone", "err", msg);
+      setMicState("erro");
+      setMicLastError(msg);
       log(`getUserMedia: ${denied ? "negado" : "erro"}: ${formatted}`, "err");
       return false;
     }
@@ -434,6 +454,8 @@ function Index() {
       resultSinceStartRef.current = false;
       finalTranscriptRef.current = "";
       setListening(true);
+      setMicState("ouvindo");
+      setMicLastError("");
       setStatus(
         "microphone",
         micPermissionGrantedRef.current ? "ok" : "waiting",
@@ -476,6 +498,7 @@ function Index() {
         if (partial) {
           setText(partial);
           setLiveTranscript(partial);
+          setMicLastInterim(partial);
           lastTranscriptRef.current = partial;
           log(`SpeechRecognition interim: "${partial}"`);
         }
@@ -484,6 +507,8 @@ function Index() {
           log(`SpeechRecognition FINAL: "${done}"`, "ok");
           setText(done);
           setLiveTranscript(done);
+          setMicLastFinal(done);
+          setMicLastInterim("");
           lastTranscriptRef.current = done;
           // Barge-in: se avatar fala e barge-in ON, interrompe antes de processar.
           if (isAvatarSpeakingRef.current && bargeInRef.current) {
@@ -511,16 +536,21 @@ function Index() {
       log(`SpeechRecognition onaudioend: ${safeStringify(event)}`);
     };
     rec.onerror = (event: any) => {
-      const details = `error=${event?.error ?? "desconhecido"} message=${event?.message ?? ""} raw=${safeStringify(event)}`;
+      const err = event?.error ?? "desconhecido";
+      const details = `error=${err} message=${event?.message ?? ""} raw=${safeStringify(event)}`;
       log(`SpeechRecognition onerror: ${details}`, "err");
-      if (event?.error === "not-allowed" || event?.error === "service-not-allowed") {
+      setMicLastError(`${err}${event?.message ? ` — ${event.message}` : ""}`);
+      if (err === "not-allowed" || err === "service-not-allowed") {
         isMutedRef.current = true;
         shouldListenRef.current = false;
         setMuted(true);
+        setMicState("erro");
         setStatus("microphone", "err", `Permissão negada — use o campo de texto: ${details}`);
-      } else if (event?.error === "no-speech") {
+      } else if (err === "no-speech") {
+        // Não é erro real, apenas silêncio. Mantém estado "ouvindo".
         setStatus("microphone", "waiting", `Nenhuma fala detectada: ${details}`);
-      } else if (event?.error === "network" || event?.error === "aborted") {
+      } else if (err === "network" || err === "aborted" || err === "audio-capture") {
+        setMicState("erro");
         setStatus("microphone", "err", `Erro de reconhecimento: ${details}`);
       }
     };
@@ -574,11 +604,17 @@ function Index() {
     isMutedRef.current = true;
     setMuted(true);
     shouldListenRef.current = false;
+    if (micTestTimerRef.current !== null) {
+      window.clearInterval(micTestTimerRef.current);
+      micTestTimerRef.current = null;
+      setMicTestRemaining(0);
+    }
     try {
       recognitionRef.current?.stop();
     } catch (error) {
       logError("recognition.stop() falhou ao mutar", error);
     }
+    setMicState("desligado");
     setStatus(
       "microphone",
       speechSupported ? (micPermissionGrantedRef.current ? "ok" : "waiting") : "err",
@@ -1046,9 +1082,27 @@ function Index() {
   }, [log, logError, speakAndWait]);
 
   const testMicrophone = useCallback(() => {
-    log("Teste isolado microfone: ligando reconhecimento sem enviar para webhooks/avatar");
-    void startRecognition("test", "teste isolado de microfone");
-  }, [log, startRecognition]);
+    log("Teste isolado microfone (5s): ligando reconhecimento sem enviar para webhooks/avatar");
+    setMicLastFinal("");
+    setMicLastInterim("");
+    setMicLastError("");
+    if (micTestTimerRef.current !== null) window.clearInterval(micTestTimerRef.current);
+    void startRecognition("test", "teste isolado de microfone (5s)");
+    let remaining = 5;
+    setMicTestRemaining(remaining);
+    micTestTimerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      setMicTestRemaining(remaining);
+      if (remaining <= 0) {
+        if (micTestTimerRef.current !== null) {
+          window.clearInterval(micTestTimerRef.current);
+          micTestTimerRef.current = null;
+        }
+        log("Teste de microfone (5s): encerrando", "ok");
+        muteMic();
+      }
+    }, 1000);
+  }, [log, muteMic, startRecognition]);
 
   const runDiagnostic = useCallback(async () => {
     setDiagRunning(true);
@@ -1456,6 +1510,49 @@ function Index() {
               </div>
             </div>
 
+            <div
+              className={`rounded-md border p-3 text-sm ${
+                micState === "ouvindo"
+                  ? "border-status-ok bg-card"
+                  : micState === "erro"
+                    ? "border-destructive bg-card"
+                    : micState === "pedindo permissão"
+                      ? "border-status-waiting bg-card"
+                      : "border-border bg-card"
+              }`}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="font-semibold">🎙️ Diagnóstico de voz</div>
+                <div className="font-mono text-xs">
+                  estado: <span className="font-semibold">{micState}</span>
+                  {micTestRemaining > 0 && (
+                    <> · teste: {micTestRemaining}s</>
+                  )}
+                </div>
+              </div>
+              <div className="grid gap-1 font-mono text-[11px] leading-snug">
+                <div>
+                  <span className="text-muted-foreground">parcial (interim):</span>{" "}
+                  <span className="break-words">{micLastInterim || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">último FINAL:</span>{" "}
+                  <span className="break-words font-semibold">{micLastFinal || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">último erro:</span>{" "}
+                  <span className={`break-words ${micLastError ? "text-destructive" : ""}`}>
+                    {micLastError || "—"}
+                  </span>
+                </div>
+              </div>
+              {typeof window !== "undefined" && !window.isSecureContext && (
+                <div className="mt-2 text-xs text-destructive">
+                  ⚠️ Página não está em HTTPS — microfone bloqueado.
+                </div>
+              )}
+            </div>
+
             <div className="grid gap-2 md:grid-cols-[1fr_auto]">
               <button
                 onClick={interruptAvatar}
@@ -1488,7 +1585,7 @@ function Index() {
                 disabled={!speechSupported}
                 className="rounded-md bg-secondary px-4 py-3 text-sm font-semibold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
-                🎤 Testar microfone
+                🎤 Testar microfone (5s){micTestRemaining > 0 ? ` — ${micTestRemaining}s` : ""}
               </button>
             </div>
           </div>
