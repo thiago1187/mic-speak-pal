@@ -896,6 +896,7 @@ function Index() {
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question }),
           })
             .then(async (response) => {
