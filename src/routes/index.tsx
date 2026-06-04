@@ -186,6 +186,43 @@ function Index() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
   const [text, setText] = useState("");
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsDraft, setSettingsDraft] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [mode, setMode] = useState<Mode>("conversa");
+  const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
+  const modeRef = useRef<Mode>("conversa");
+
+  useEffect(() => {
+    const s = loadSettings();
+    const m = loadMode();
+    setSettings(s);
+    setSettingsDraft(s);
+    setMode(m);
+    settingsRef.current = s;
+    modeRef.current = m;
+  }, []);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+    if (typeof window !== "undefined") window.localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
+
+  const saveSettings = useCallback(() => {
+    setSettings(settingsDraft);
+    settingsRef.current = settingsDraft;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settingsDraft));
+    }
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 1800);
+  }, [settingsDraft]);
+
   const [liveTranscript, setLiveTranscript] = useState("");
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false);
