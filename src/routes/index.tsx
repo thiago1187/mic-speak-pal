@@ -276,6 +276,17 @@ function Index() {
   const camVideoRef = useRef<HTMLVideoElement>(null);
   const camStreamRef = useRef<MediaStream | null>(null);
 
+  // Recall.ai bot state
+  const [botId, setBotId] = useState<string | null>(null);
+  const [botJoining, setBotJoining] = useState(false);
+  const [botStatus, setBotStatus] = useState<string>("");
+  const botIdRef = useRef<string | null>(null);
+  const recallSeenCountRef = useRef(0);
+  const recallPollTimerRef = useRef<number | null>(null);
+  useEffect(() => { botIdRef.current = botId; }, [botId]);
+
+
+
 
   useEffect(() => {
     bargeInRef.current = bargeIn;
