@@ -178,10 +178,13 @@ function Index() {
   const finalTranscriptRef = useRef("");
   const lastTranscriptRef = useRef("");
   const handleSendRef = useRef<((rawText?: string) => Promise<void>) | null>(null);
+  const handleVoiceUtteranceRef = useRef<((text: string) => Promise<void>) | null>(null);
   const isAvatarSpeakingRef = useRef(false);
   const isMutedRef = useRef(true);
   const shouldListenRef = useRef(false);
   const micPermissionGrantedRef = useRef(false);
+  const bargeInRef = useRef(false);
+  const meetingActiveRef = useRef(false);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
@@ -232,6 +235,26 @@ function Index() {
   const [speechSupported, setSpeechSupported] = useState(true);
   const [showStartMediaButton, setShowStartMediaButton] = useState(false);
   const [webrtcState, setWebrtcState] = useState("aguardando");
+  const [bargeIn, setBargeIn] = useState(false);
+  const [meetingActive, setMeetingActive] = useState(false);
+
+  useEffect(() => {
+    bargeInRef.current = bargeIn;
+  }, [bargeIn]);
+
+  // Espelha estado da Reunião pra UI; meetingActiveRef é a fonte da verdade.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setMeetingActive((v) => (v !== meetingActiveRef.current ? meetingActiveRef.current : v));
+    }, 400);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Ao trocar de modo, reseta o estado DORMINDO da Reunião.
+  useEffect(() => {
+    meetingActiveRef.current = false;
+    setMeetingActive(false);
+  }, [mode]);
 
   const log = useCallback((msg: string, kind: LogEntry["kind"] = "info") => {
     const line = `${new Date().toISOString()} ${msg}`;
@@ -283,7 +306,7 @@ function Index() {
   }, [log, logError, setStatus]);
 
   const requestMicrophonePermission = useCallback(async () => {
-    log("getUserMedia({ audio: true }): solicitando permissão explicitamente");
+    log("getUserMedia({ audio: { EC/NS/AGC: true } }): solicitando permissão");
     if (!navigator.mediaDevices?.getUserMedia) {
       const message = "navigator.mediaDevices.getUserMedia não existe neste navegador";
       setStatus("microphone", "err", message);
@@ -291,10 +314,16 @@ function Index() {
       return false;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       stream.getTracks().forEach((track) => track.stop());
       micPermissionGrantedRef.current = true;
-      setStatus("microphone", "ok", "Reconhecimento suportado + permissão de microfone permitida");
+      setStatus("microphone", "ok", "Microfone permitido (EC/NS/AGC). Funciona melhor no Chrome desktop.");
       log("getUserMedia: permitido; tracks de teste encerradas", "ok");
       return true;
     } catch (error: any) {
@@ -316,7 +345,6 @@ function Index() {
       if (
         shouldListenRef.current &&
         !isMutedRef.current &&
-        !isAvatarSpeakingRef.current &&
         recognitionRef.current &&
         !isRecognitionRunningRef.current
       ) {
@@ -331,23 +359,12 @@ function Index() {
         }
       } else {
         log(
-          `recognition não reiniciado (${reason}). shouldListen=${shouldListenRef.current} muted=${isMutedRef.current} avatarSpeaking=${isAvatarSpeakingRef.current} running=${isRecognitionRunningRef.current}`,
+          `recognition não reiniciado (${reason}). shouldListen=${shouldListenRef.current} muted=${isMutedRef.current} running=${isRecognitionRunningRef.current}`,
         );
       }
     },
     [log, logError],
   );
-
-  const pauseRecognitionForAvatar = useCallback(() => {
-    log("mic pausado (avatar falando)");
-    try {
-      if (recognitionRef.current && isRecognitionRunningRef.current) {
-        recognitionRef.current.stop();
-      }
-    } catch (error) {
-      logError("recognition.stop() falhou ao pausar por anti-eco", error);
-    }
-  }, [log, logError]);
 
   useEffect(() => {
     log("Inicializando diagnósticos globais");
@@ -394,7 +411,7 @@ function Index() {
     const rec = new SR();
     rec.lang = "pt-BR";
     rec.interimResults = true;
-    rec.continuous = false;
+    rec.continuous = true;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
@@ -423,26 +440,51 @@ function Index() {
     rec.onresult = (event: any) => {
       try {
         let interim = "";
-        let final = "";
+        const finals: string[] = [];
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i]?.[0]?.transcript ?? "";
-          if (event.results[i].isFinal) final += transcript;
-          else interim += transcript;
+          const transcript = (event.results[i]?.[0]?.transcript ?? "").trim();
+          if (!transcript) continue;
+          if (event.results[i].isFinal) finals.push(transcript);
+          else interim += transcript + " ";
         }
         const partial = interim.trim();
-        const done = final.trim();
         resultSinceStartRef.current = true;
-        if (done) finalTranscriptRef.current = `${finalTranscriptRef.current} ${done}`.trim();
-        const display = (done || partial || finalTranscriptRef.current).trim();
-        if (display) {
-          setText(display);
-          setLiveTranscript(display);
-          lastTranscriptRef.current = display;
+
+        // Se avatar está falando e barge-in está DESLIGADO, ignora tudo.
+        if (isAvatarSpeakingRef.current && !bargeInRef.current) {
+          if (partial) log(`(avatar falando, barge-in OFF) interim ignorado: "${partial}"`);
+          if (finals.length)
+            log(`(avatar falando, barge-in OFF) final ignorado: "${finals.join(" | ")}"`);
+          return;
         }
-        log(
-          `SpeechRecognition onresult: parcial="${partial}" final="${done}" finalAcumulado="${finalTranscriptRef.current}"`,
-          done ? "ok" : "info",
-        );
+
+        if (partial) {
+          setText(partial);
+          setLiveTranscript(partial);
+          lastTranscriptRef.current = partial;
+          log(`SpeechRecognition interim: "${partial}"`);
+        }
+
+        for (const done of finals) {
+          log(`SpeechRecognition FINAL: "${done}"`, "ok");
+          setText(done);
+          setLiveTranscript(done);
+          lastTranscriptRef.current = done;
+          // Barge-in: se avatar fala e barge-in ON, interrompe antes de processar.
+          if (isAvatarSpeakingRef.current && bargeInRef.current) {
+            try {
+              log("barge-in ON: interrompendo avatar", "ok");
+              (sessionRef.current as any)?.interrupt?.();
+            } catch (e) {
+              logError("interrupt() falhou no barge-in", e);
+            }
+          }
+          if (recognitionModeRef.current === "test") {
+            log(`(modo teste de mic) final NÃO enviado: "${done}"`);
+          } else {
+            void handleVoiceUtteranceRef.current?.(done);
+          }
+        }
       } catch (error) {
         logError("Erro dentro de SpeechRecognition onresult", error);
       }
@@ -460,7 +502,7 @@ function Index() {
         isMutedRef.current = true;
         shouldListenRef.current = false;
         setMuted(true);
-        setStatus("microphone", "err", `Permissão de microfone negada: ${details}`);
+        setStatus("microphone", "err", `Permissão negada — use o campo de texto: ${details}`);
       } else if (event?.error === "no-speech") {
         setStatus("microphone", "waiting", `Nenhuma fala detectada: ${details}`);
       } else if (event?.error === "network" || event?.error === "aborted") {
@@ -470,25 +512,15 @@ function Index() {
     rec.onend = () => {
       isRecognitionRunningRef.current = false;
       setListening(false);
-      const finalText = finalTranscriptRef.current.trim();
       log(
-        `SpeechRecognition onend: final="${finalText}" houveResultado=${resultSinceStartRef.current} mode=${recognitionModeRef.current}`,
+        `SpeechRecognition onend (mode=${recognitionModeRef.current}). Reiniciando se mic ligado.`,
       );
-      if (!resultSinceStartRef.current) {
-        log(
-          "SpeechRecognition onend disparou sem resultado — alguns navegadores encerram e exigem reiniciar a cada fala.",
-          "err",
-        );
-      }
-      const transcriptToSend = finalText || lastTranscriptRef.current.trim();
-      if (recognitionModeRef.current === "chat" && transcriptToSend) {
-        setTimeout(() => void handleSendRef.current?.(transcriptToSend), 0);
-      }
-      maybeStartListening("onend");
+      // Web Speech API às vezes para sozinha — reinicia se mic ainda ligado.
+      maybeStartListening("onend auto-restart");
     };
 
     recognitionRef.current = rec;
-    log("SpeechRecognition configurado: lang=pt-BR interimResults=true continuous=false", "ok");
+    log("SpeechRecognition configurado: lang=pt-BR interimResults=true continuous=true", "ok");
     return () => {
       try {
         rec.stop();
@@ -640,21 +672,19 @@ function Index() {
       session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () => {
         isAvatarSpeakingRef.current = true;
         setAvatarSpeaking(true);
-        log("avatar começou a falar", "ok");
-        pauseRecognitionForAvatar();
+        log("avatar começou a falar (mic permanece ligado; confiando em EC)", "ok");
       });
       session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () => {
         isAvatarSpeakingRef.current = false;
         setAvatarSpeaking(false);
         log("avatar terminou de falar", "ok");
-        if (shouldListenRef.current && !isMutedRef.current) {
-          log("mic reativado");
-          maybeStartListening("avatar.speak_ended");
+        if (modeRef.current === "entrevistador" && shouldListenRef.current && !isMutedRef.current) {
+          maybeStartListening("entrevistador: pronto pra resposta");
         }
       });
       log(`Eventos SDK registrados: ${[...sessionEvents, ...agentEvents].join(", ")}`, "ok");
     },
-    [attemptVideoPlay, log, logError, maybeStartListening, pauseRecognitionForAvatar, setStatus],
+    [attemptVideoPlay, log, logError, maybeStartListening, setStatus],
   );
 
   const startSession = useCallback(async () => {
@@ -790,8 +820,10 @@ function Index() {
     [connected, log, logError, waitForAvatarEnd],
   );
 
+  // Núcleo de envio: aceita override de modo e flag `responder` (Reunião).
+  // Aplica REGRA DO VAZIO: se renante output vazio, não fala e não chama filler.
   const handleSend = useCallback(
-    async (rawText?: string) => {
+    async (rawText?: string, opts?: { responder?: boolean }) => {
       const question = (rawText ?? text).trim();
       if (!question) {
         log("handleSend ignorado: texto vazio");
@@ -811,8 +843,40 @@ function Index() {
           : currentMode === "reuniao"
             ? s.webhookReuniao
             : s.webhookEntrevistador;
-      const useFiller = currentMode !== "entrevistador";
-      log(`enviando pergunta (modo=${currentMode}): ${question}`);
+
+      // Reunião: corpo inclui `responder`. Texto digitado default = true.
+      const responder = currentMode === "reuniao" ? opts?.responder ?? true : undefined;
+      const willSpeak =
+        currentMode === "conversa" ||
+        currentMode === "entrevistador" ||
+        (currentMode === "reuniao" && responder === true);
+      const useFiller = willSpeak && currentMode !== "entrevistador";
+
+      const body: Record<string, unknown> = { question, sessionId: currentMode };
+      if (responder !== undefined) body.responder = responder;
+      log(
+        `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
+      );
+
+      const renanteP = fetch(renanteUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(async (response) => {
+          const txt = await response.text();
+          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${txt}`);
+          if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${txt}`);
+          try {
+            return JSON.parse(txt);
+          } catch {
+            return { output: txt };
+          }
+        })
+        .catch((error) => {
+          logError("erro Renante", error);
+          return { output: "" };
+        });
 
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
@@ -821,13 +885,13 @@ function Index() {
             body: JSON.stringify({ question }),
           })
             .then(async (response) => {
-              const body = await response.text();
-              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${body}`);
-              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${body}`);
+              const txt = await response.text();
+              log(`Webhook filler: HTTP ${response.status} ${response.statusText}\n${txt}`);
+              if (!response.ok) throw new Error(`Filler HTTP ${response.status}: ${txt}`);
               try {
-                return JSON.parse(body);
+                return JSON.parse(txt);
               } catch {
-                return { filler: body };
+                return { filler: txt };
               }
             })
             .catch((error) => {
@@ -836,57 +900,47 @@ function Index() {
             })
         : Promise.resolve({ filler: "" });
 
-      const renanteP = fetch(renanteUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, sessionId: currentMode }),
-      })
-        .then(async (response) => {
-          const body = await response.text();
-          log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${body}`);
-          if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${body}`);
-          try {
-            return JSON.parse(body);
-          } catch {
-            return { output: body };
-          }
-        })
-        .catch((error) => {
-          logError("erro Renante", error);
-          return { output: "" };
-        });
-
-      const fillerJson: any = await fillerP;
-      const fillerText = (fillerJson?.filler ?? "").toString().trim();
-      if (useFiller) {
-        log(`filler recebido: "${fillerText}" payload=${safeStringify(fillerJson)}`, "ok");
-      } else {
-        log("modo entrevistador — filler desligado");
-      }
-      if (fillerText) {
-        try {
-          await speakAndWait(fillerText);
-        } catch (error) {
-          logError("erro speak_text filler", error);
-        }
-      } else if (useFiller) {
-        log("filler vazio — pulando direto pra resposta");
+      // Se não vai falar (Reunião dormindo), só espera o webhook pra logar e sai.
+      if (!willSpeak) {
+        const j: any = await renanteP;
+        log(`(reuniao DORMINDO) resposta ignorada: ${safeStringify(j)}`);
+        return;
       }
 
-
+      // REGRA DO VAZIO: aguarda renante primeiro; se vazio, não fala nem filler.
       const renanteJson: any = await renanteP;
       const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
         .toString()
         .trim();
-      log(`resposta Renante recebida: ${renanteText || safeStringify(renanteJson)}`, "ok");
-      if (renanteText) {
-        try {
-          await speakAndWait(renanteText);
-        } catch (error) {
-          logError("erro speak_text resposta", error);
+      if (!renanteText) {
+        log(
+          `output vazio — avatar fica calado e filler descartado. Payload=${safeStringify(renanteJson)}`,
+        );
+        // Drena promessa do filler pra não vazar
+        void fillerP;
+        return;
+      }
+
+      if (useFiller) {
+        const fillerJson: any = await fillerP;
+        const fillerText = (fillerJson?.filler ?? "").toString().trim();
+        log(`filler recebido: "${fillerText}"`, "ok");
+        if (fillerText) {
+          try {
+            await speakAndWait(fillerText);
+          } catch (error) {
+            logError("erro speak_text filler", error);
+          }
+        } else {
+          log("filler vazio — pulando direto pra resposta");
         }
-      } else {
-        log(`resposta Renante vazia. Payload=${safeStringify(renanteJson)}`, "err");
+      }
+
+      log(`resposta Renante: "${renanteText}"`, "ok");
+      try {
+        await speakAndWait(renanteText);
+      } catch (error) {
+        logError("erro speak_text resposta", error);
       }
     },
     [connected, log, logError, speakAndWait, text],
@@ -895,6 +949,76 @@ function Index() {
   useEffect(() => {
     handleSendRef.current = handleSend;
   }, [handleSend]);
+
+  // Roteia falas reconhecidas no microfone, aplicando wake/end words da Reunião.
+  const handleVoiceUtterance = useCallback(
+    async (utter: string) => {
+      const t = utter.trim();
+      if (!t) return;
+      const currentMode = modeRef.current;
+      const low = t
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+      if (currentMode === "reuniao") {
+        const wakeRe = /\b(ola |oi |ei |hey |alo )?renante\b/;
+        const endRe = /\b(encerra|encerrar|pode parar|valeu renante|tchau renante|obrigado renante)\b/;
+        const hasWake = wakeRe.test(low);
+        const hasEnd = endRe.test(low);
+
+        if (hasEnd && meetingActiveRef.current) {
+          meetingActiveRef.current = false;
+          log(`Reunião: comando de encerrar detectado ("${t}") → DORMINDO`, "ok");
+        }
+        let responder = meetingActiveRef.current;
+        if (!meetingActiveRef.current && hasWake) {
+          meetingActiveRef.current = true;
+          responder = true;
+          log(`Reunião: wake word detectada ("${t}") → ATIVO`, "ok");
+        }
+        await handleSend(t, { responder });
+        return;
+      }
+
+      // Conversa e Entrevistador: fluxo padrão.
+      await handleSend(t);
+    },
+    [handleSend, log],
+  );
+
+  useEffect(() => {
+    handleVoiceUtteranceRef.current = handleVoiceUtterance;
+  }, [handleVoiceUtterance]);
+
+  // Interromper avatar (botão + tecla espaço).
+  const interruptAvatar = useCallback(() => {
+    const session = sessionRef.current as any;
+    if (!session) {
+      log("interrupt ignorado: sem sessão", "err");
+      return;
+    }
+    try {
+      log("⏹️ interrupt() chamado pelo usuário", "ok");
+      session.interrupt?.();
+    } catch (error) {
+      logError("session.interrupt() falhou", error);
+    }
+  }, [log, logError]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      interruptAvatar();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [interruptAvatar]);
+
+
 
   const testAvatar = useCallback(async () => {
     log('Teste isolado avatar: "Oi, teste de áudio, tá funcionando"');
@@ -1030,14 +1154,37 @@ function Index() {
                   {!speechSupported
                     ? "Sem suporte a voz"
                     : muted
-                      ? "Microfone mutado"
-                      : listening
-                        ? "Ouvindo..."
-                        : avatarSpeaking
-                          ? "Avatar falando (mic pausado)"
-                          : "Aguardando fala"}
+                      ? "Mic desligado"
+                      : avatarSpeaking
+                        ? "Avatar falando"
+                        : mode === "reuniao" && !meetingActive
+                          ? 'Dormindo (diga "Renante")'
+                          : mode === "reuniao" && meetingActive
+                            ? "Sessão ativa"
+                            : listening
+                              ? "Ouvindo..."
+                              : "Aguardando fala"}
                 </div>
               </div>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <button
+                onClick={interruptAvatar}
+                disabled={!connected}
+                className="rounded-md bg-destructive px-4 py-3 text-sm font-semibold text-destructive-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                title="Atalho: barra de espaço"
+              >
+                ⏹️ Interromper (espaço)
+              </button>
+              <label className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={bargeIn}
+                  onChange={(e) => setBargeIn(e.target.checked)}
+                />
+                Permitir interromper falando
+              </label>
             </div>
 
             <div className="grid gap-2 md:grid-cols-2">
