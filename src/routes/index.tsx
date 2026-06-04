@@ -253,6 +253,15 @@ function Index() {
   const [diagReport, setDiagReport] = useState("");
   const [diagCopied, setDiagCopied] = useState(false);
 
+  // Painel de diagnóstico de voz (sempre visível quando mic ligado)
+  type MicState = "desligado" | "pedindo permissão" | "ouvindo" | "erro";
+  const [micState, setMicState] = useState<MicState>("desligado");
+  const [micLastInterim, setMicLastInterim] = useState("");
+  const [micLastFinal, setMicLastFinal] = useState("");
+  const [micLastError, setMicLastError] = useState("");
+  const [micTestRemaining, setMicTestRemaining] = useState(0);
+  const micTestTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     bargeInRef.current = bargeIn;
   }, [bargeIn]);
