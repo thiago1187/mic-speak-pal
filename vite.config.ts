@@ -22,9 +22,12 @@ export default defineConfig({
         preset: process.env.NITRO_PRESET,
         ...(process.env.NITRO_PRESET === "vercel"
           ? {
+              // Caminhos EXATOS do preset vercel do nitro (o config do Lovable
+              // os força pra dist/*, então sobrescrevemos de volta). O servidor
+              // vai direto pra __server.func, que é o destino /__server do config.json.
               output: {
                 dir: ".vercel/output",
-                serverDir: ".vercel/output/functions/__nitro.func",
+                serverDir: ".vercel/output/functions/__server.func",
                 publicDir: ".vercel/output/static",
               },
             }
