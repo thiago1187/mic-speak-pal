@@ -1341,6 +1341,7 @@ function Index() {
                 title="Diagnóstico"
               >
                 🩺 Diagnóstico
+              </button>
             </div>
           </div>
 
