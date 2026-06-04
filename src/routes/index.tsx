@@ -1036,8 +1036,8 @@ function Index() {
         .replace(/[\u0300-\u036f]/g, "");
 
       if (currentMode === "reuniao") {
-        const wakeRe = /\b(ola |oi |ei |hey |alo )?renante\b/;
-        const endRe = /\b(encerra|encerrar|pode parar|valeu renante|tchau renante|obrigado renante)\b/;
+        const wakeRe = /\b(ola |oi |ei |hey |alo )?(renante|renan|dante)\b/;
+        const endRe = /\b(desligar (renante|renan|dante)|tchau (renante|renan|dante)|valeu (renante|renan|dante)|obrigado (renante|renan|dante)|encerra|encerrar|pode parar)\b/;
         const hasWake = wakeRe.test(low);
         const hasEnd = endRe.test(low);
 
