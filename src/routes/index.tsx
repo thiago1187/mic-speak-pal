@@ -52,6 +52,7 @@ type Settings = {
   meetLaunchMode: Mode; // qual modo usar ao entrar no Meet
   meetConfigs: Record<Mode, MeetModeConfig>;
   meetDebug: boolean; // mostra diagnóstico (status do WebSocket) na câmera do bot
+  meetSilenceSec: number; // pausa de silêncio (s) no Meet antes de mandar a fala pro n8n
   entrevistadorSilenceSec: number; // pausa de silêncio (s) antes de fechar a fala no Entrevistador
 };
 
@@ -93,6 +94,7 @@ const DEFAULT_SETTINGS: Settings = {
     },
   },
   meetDebug: false,
+  meetSilenceSec: 0.5,
   entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
 };
 
@@ -146,6 +148,7 @@ function buildMeetUrl(s: Settings, debug: boolean): string {
     greeting: cfg.greeting,
     mmode: cfg.behavior,
     barge: cfg.bargeIn ? "1" : "0",
+    sil: String(s.meetSilenceSec ?? 0.5),
     debug: debug ? "1" : "0",
   });
   return `${base}/meet?${qs.toString()}`;
@@ -2517,6 +2520,29 @@ function Index() {
                       </div>
                     );
                   })}
+
+                  <label className="mb-1 block text-sm">
+                    <span className="mb-1 block font-medium">
+                      Pausa antes de enviar (segundos)
+                    </span>
+                    <input
+                      type="number"
+                      min={0.2}
+                      step={0.1}
+                      value={settingsDraft.meetSilenceSec}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({
+                          ...d,
+                          meetSilenceSec: Number(e.target.value) || 0.5,
+                        }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      No Meet ele acumula sua fala e só manda pro n8n após esse silêncio
+                      (evita engolir/cortar). Vale pros 3 modos. Padrão 0,5s.
+                    </span>
+                  </label>
 
                   <label className="mt-3 flex items-center gap-2 text-sm">
                     <input

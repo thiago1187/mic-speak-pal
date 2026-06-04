@@ -51,6 +51,7 @@ type Cfg = {
   meetMode: "wake" | "always"; // wake = só após o nome; always = responde tudo
   bargeIn: boolean; // permitir interromper a fala dele falando por cima
   sid: string; // sessionId enviado ao webhook (= modo: conversa/reuniao/entrevistador)
+  silenceSec: number; // pausa de silêncio antes de fechar a fala e mandar pro n8n
 };
 
 function readConfig(): Cfg {
@@ -70,6 +71,7 @@ function readConfig(): Cfg {
     meetMode: q.get("mmode") === "always" ? "always" : "wake",
     bargeIn: q.get("barge") === "1",
     sid: q.get("sid") || "reuniao",
+    silenceSec: Number(q.get("sil")) || 0.5,
   };
 }
 
@@ -83,6 +85,12 @@ function MeetAvatar() {
   const wsRef = useRef<WebSocket | null>(null);
   const lastSegRef = useRef(""); // dedupe de transcrições repetidas
   const cfgRef = useRef<Cfg>(readConfig());
+  // Buffer + timer de silêncio: acumula os trechos e só envia quando a pessoa para.
+  const meetBufferRef = useRef("");
+  const meetSilenceTimerRef = useRef<number | null>(null);
+  const handleTranscriptRef = useRef<
+    ((text: string, speaker: string, isFinal: boolean) => void) | null
+  >(null);
   // No modo limpo (sem ?debug=1) NÃO guardamos logs em estado — cada setState é um
   // re-render, e dentro do navegador do Recall isso rouba CPU do encode do vídeo.
   const debugRef = useRef(false);
@@ -251,33 +259,11 @@ function MeetAvatar() {
     [log, speakAndWait],
   );
 
-  // ---- roteia um trecho transcrito (classifica LOCAL antes de chamar webhook) ----
+  // ---- classifica a fala COMPLETA (já acumulada) e decide o que fazer ----
   const routeSegment = useCallback(
     async (rawText: string, speaker: string) => {
       const t = (rawText ?? "").trim();
       if (!t) return;
-      // ignora a própria fala do avatar captada pela transcrição (evita loop)
-      if (speaker && /renante|renan|dante/i.test(speaker)) {
-        log(`(ignora própria fala) ${speaker}: ${t}`);
-        return;
-      }
-      if (t === lastSegRef.current) return; // dedupe
-      lastSegRef.current = t;
-
-      // Avatar falando? Barge-in decide: interrompe (ON) ou ignora a fala (OFF).
-      if (isAvatarSpeakingRef.current) {
-        if (cfgRef.current.bargeIn) {
-          try {
-            (sessionRef.current as any)?.interrupt?.();
-            log("barge-in: interrompendo a fala atual", "ok");
-          } catch (e: any) {
-            log(`interrupt falhou: ${e?.message ?? e}`, "err");
-          }
-        } else {
-          log(`(falando, barge-in OFF) ignorado: "${t}"`);
-          return;
-        }
-      }
 
       // Modo "sempre ativo": responde tudo, sem wake/desligar.
       if (cfgRef.current.meetMode === "always") {
@@ -341,6 +327,59 @@ function MeetAvatar() {
     },
     [handleSend, log, speakAndWait],
   );
+
+  // Junta os trechos acumulados e dispara a classificação quando a pessoa para.
+  const flushMeet = useCallback(() => {
+    if (meetSilenceTimerRef.current !== null) {
+      window.clearTimeout(meetSilenceTimerRef.current);
+      meetSilenceTimerRef.current = null;
+    }
+    const buffered = meetBufferRef.current.trim();
+    meetBufferRef.current = "";
+    lastSegRef.current = "";
+    if (buffered) {
+      log(`pausa (~${cfgRef.current.silenceSec}s) — fala completa: "${buffered}"`, "ok");
+      void routeSegment(buffered, "");
+    }
+  }, [log, routeSegment]);
+
+  // Recebe cada trecho do WebSocket. Acumula só os FINAIS; partials (e finais)
+  // reiniciam o timer. Só envia ao n8n após `silenceSec` de silêncio contínuo.
+  const onTranscript = useCallback(
+    (rawText: string, speaker: string, isFinal: boolean) => {
+      const t = (rawText ?? "").trim();
+      if (!t) return;
+      // ignora a própria fala do avatar (evita loop de ouvir a própria voz)
+      if (speaker && /renante|renan|dante/i.test(speaker)) return;
+
+      // Avatar falando? Barge-in decide: interrompe (ON) ou ignora (OFF).
+      if (isAvatarSpeakingRef.current) {
+        if (cfgRef.current.bargeIn) {
+          try {
+            (sessionRef.current as any)?.interrupt?.();
+          } catch {}
+        } else {
+          return; // ignora enquanto fala
+        }
+      }
+
+      // Acumula só os finais (partials mudam). Dedupe de final repetido seguido.
+      if (isFinal && t !== lastSegRef.current) {
+        meetBufferRef.current = `${meetBufferRef.current} ${t}`.trim();
+        lastSegRef.current = t;
+      }
+
+      // (Re)inicia o timer de silêncio a cada trecho (a pessoa ainda está falando).
+      if (meetSilenceTimerRef.current !== null) window.clearTimeout(meetSilenceTimerRef.current);
+      const ms = Math.max(200, (cfgRef.current.silenceSec || 0.5) * 1000);
+      meetSilenceTimerRef.current = window.setTimeout(flushMeet, ms);
+    },
+    [flushMeet],
+  );
+
+  useEffect(() => {
+    handleTranscriptRef.current = onTranscript;
+  }, [onTranscript]);
 
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
   // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
@@ -429,9 +468,9 @@ function MeetAvatar() {
           const speaker = (tr?.speaker ?? tr?.participant?.name ?? parsed?.speaker ?? "").toString();
           const isFinal = tr?.is_final ?? tr?.isFinal;
           if (!text) return;
-          // Age apenas em finais. Se o schema não trouxer is_final, age em tudo (com dedupe).
-          if (isFinal === false) return;
-          void routeSegment(text, speaker);
+          // Partials (is_final=false) só reiniciam o timer; finais entram no buffer.
+          // Se o schema não trouxer is_final, trata como final.
+          handleTranscriptRef.current?.(text, speaker, isFinal !== false);
         };
       } catch (e: any) {
         log(`falha ao abrir WebSocket: ${e?.message ?? e}`, "err");
@@ -530,6 +569,10 @@ function MeetAvatar() {
 
     return () => {
       cancelled = true;
+      if (meetSilenceTimerRef.current !== null) {
+        window.clearTimeout(meetSilenceTimerRef.current);
+        meetSilenceTimerRef.current = null;
+      }
       try {
         wsRef.current?.close();
       } catch {}
@@ -538,7 +581,7 @@ function MeetAvatar() {
       } catch {}
       sessionRef.current = null;
     };
-  }, [fetchToken, log, routeSegment, tryPlay, speakAndWait]);
+  }, [fetchToken, log, tryPlay, speakAndWait]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
