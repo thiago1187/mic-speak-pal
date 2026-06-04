@@ -1050,6 +1050,271 @@ function Index() {
     void startRecognition("test", "teste isolado de microfone");
   }, [log, startRecognition]);
 
+  const runDiagnostic = useCallback(async () => {
+    setDiagRunning(true);
+    setDiagResults([]);
+    setDiagReport("");
+    const results: DiagItem[] = [];
+    const push = (r: DiagItem) => {
+      results.push(r);
+      setDiagResults([...results]);
+    };
+
+    const s = settingsRef.current;
+    const mask = (v: string) => (v ? `....${v.slice(-4)}` : "(vazio)");
+
+    // 1) CONFIG
+    const cfgLines = [
+      `webhookConversa: ${s.webhookConversa ? "✅ " + s.webhookConversa : "❌ vazio"}`,
+      `webhookReuniao: ${s.webhookReuniao ? "✅ " + s.webhookReuniao : "❌ vazio"}`,
+      `webhookEntrevistador: ${s.webhookEntrevistador ? "✅ " + s.webhookEntrevistador : "❌ vazio"}`,
+      `webhookFiller: ${s.webhookFiller ? "✅ " + s.webhookFiller : "❌ vazio"}`,
+      `apiKey: ${s.apiKey ? "✅ " + mask(s.apiKey) : "❌ vazio"}`,
+      `avatarId: ${s.avatarId ? "✅ " + s.avatarId : "❌ vazio"}`,
+      `voiceId: ${s.voiceId ? "✅ " + s.voiceId : "❌ vazio"}`,
+      `contextId: ${s.contextId ? "✅ " + s.contextId : "❌ vazio"}`,
+      `language: ${s.language ? "✅ " + s.language : "❌ vazio"}`,
+    ];
+    const cfgMissing = [
+      s.webhookConversa,
+      s.webhookReuniao,
+      s.webhookEntrevistador,
+      s.webhookFiller,
+      s.apiKey,
+      s.avatarId,
+      s.voiceId,
+      s.contextId,
+      s.language,
+    ].some((v) => !v);
+    push({
+      id: "config",
+      title: "Config carregada",
+      status: cfgMissing ? "warn" : "ok",
+      detail: cfgLines.join("\n"),
+    });
+
+    // 2) NAVEGADOR / MIC
+    const ua = navigator.userAgent;
+    const browser = /Edg\//.test(ua)
+      ? "Edge"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Firefox\//.test(ua)
+          ? "Firefox"
+          : /Safari\//.test(ua)
+            ? "Safari"
+            : "Desconhecido";
+    const hasSR = Boolean(
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition,
+    );
+    push({
+      id: "browser",
+      title: "Navegador / Web Speech API",
+      status: hasSR ? "ok" : "fail",
+      detail: `Navegador: ${browser}\nWeb Speech API: ${hasSR ? "✅ suportada" : "❌ NÃO suportada (use Chrome desktop)"}\nUA: ${ua}`,
+    });
+
+    // 3) ESTADO DO AVATAR
+    const tokOk = statuses.token.state === "ok";
+    const sessOk = statuses.session.state === "ok";
+    const vidOk = statuses.video.state === "ok";
+    const allOk = tokOk && sessOk && vidOk;
+    push({
+      id: "session",
+      title: "Sessão LiveAvatar",
+      status: allOk ? "ok" : sessOk || tokOk ? "warn" : "info",
+      detail: [
+        `Token obtido: ${tokOk ? "✅ sim" : "❌ não"} — ${statuses.token.detail}`,
+        `Sessão iniciada: ${sessOk ? "✅ sim" : "❌ não"} — ${statuses.session.detail}`,
+        `Vídeo conectado: ${vidOk ? "✅ sim" : "❌ não"} — ${statuses.video.detail}`,
+        `WebRTC: ${webrtcState}`,
+      ].join("\n"),
+    });
+
+    // 4) WEBHOOKS
+    type WhTest = {
+      id: string;
+      title: string;
+      url: string;
+      body: any;
+      validate: (parsed: any, raw: string) => { ok: boolean; reason: string };
+    };
+    const webhookTests: WhTest[] = [
+      {
+        id: "filler-gerar",
+        title: 'Filler (gerar) — pergunta longa',
+        url: s.webhookFiller,
+        body: { question: "como ta minha agenda amanha" },
+        validate: (p) => {
+          const f = (p?.filler ?? "").toString().trim();
+          return { ok: f.length > 0, reason: f ? `filler="${f}"` : "filler vazio (esperado NÃO vazio)" };
+        },
+      },
+      {
+        id: "filler-skip",
+        title: 'Filler (skip) — pergunta curta',
+        url: s.webhookFiller,
+        body: { question: "oi" },
+        validate: (p) => {
+          const f = (p?.filler ?? "").toString().trim();
+          return { ok: f.length === 0, reason: f ? `filler="${f}" (esperado vazio)` : "filler vazio (ok)" };
+        },
+      },
+      {
+        id: "conversa",
+        title: "Conversa",
+        url: s.webhookConversa,
+        body: { question: "diagnostico, responda apenas OK", sessionId: "diagnostico" },
+        validate: (p) => {
+          const o = (p?.output ?? p?.text ?? p?.message ?? "").toString().trim();
+          return { ok: o.length > 0, reason: o ? `output="${o}"` : "output vazio (esperado texto)" };
+        },
+      },
+      {
+        id: "reuniao-ambiente",
+        title: "Reunião (ambiente, responder=false)",
+        url: s.webhookReuniao,
+        body: { question: "fala ambiente de teste", sessionId: "diagnostico-reuniao", responder: false },
+        validate: (p) => {
+          const o = (p?.output ?? "").toString().trim();
+          return { ok: o.length === 0, reason: o ? `output="${o}" (esperado vazio)` : "output vazio (ok)" };
+        },
+      },
+      {
+        id: "reuniao-chamado",
+        title: "Reunião (chamado, responder=true)",
+        url: s.webhookReuniao,
+        body: { question: "Renante, responda apenas OK", sessionId: "diagnostico-reuniao", responder: true },
+        validate: (p) => {
+          const o = (p?.output ?? "").toString().trim();
+          return { ok: o.length > 0, reason: o ? `output="${o}"` : "output vazio (esperado texto)" };
+        },
+      },
+      {
+        id: "entrevistador",
+        title: "Entrevistador",
+        url: s.webhookEntrevistador,
+        body: { question: "pode comecar", sessionId: "diagnostico-entrevista" },
+        validate: (p) => {
+          const o = (p?.output ?? "").toString().trim();
+          return { ok: o.length > 0, reason: o ? `output="${o}"` : "output vazio (esperado pergunta)" };
+        },
+      },
+    ];
+
+    for (const t of webhookTests) {
+      if (!t.url) {
+        push({
+          id: t.id,
+          title: t.title,
+          status: "fail",
+          detail: "URL do webhook não configurada.",
+        });
+        continue;
+      }
+      const t0 = performance.now();
+      try {
+        const res = await fetch(t.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(t.body),
+        });
+        const dur = Math.round(performance.now() - t0);
+        const raw = await res.text();
+        const preview = raw.slice(0, 200);
+        let parsed: any = {};
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = { _raw: raw };
+        }
+        if (!res.ok) {
+          push({
+            id: t.id,
+            title: t.title,
+            status: "fail",
+            detail: `HTTP ${res.status} ${res.statusText} — corpo:\n${preview}`,
+            httpStatus: res.status,
+            durationMs: dur,
+            rawPreview: preview,
+          });
+          continue;
+        }
+        const v = t.validate(parsed, raw);
+        push({
+          id: t.id,
+          title: t.title,
+          status: v.ok ? "ok" : "fail",
+          detail: `${v.reason}\nResposta crua (200 chars): ${preview}`,
+          httpStatus: res.status,
+          durationMs: dur,
+          rawPreview: preview,
+        });
+      } catch (err: any) {
+        const dur = Math.round(performance.now() - t0);
+        push({
+          id: t.id,
+          title: t.title,
+          status: "fail",
+          detail: `Erro de rede/CORS: ${err?.name ?? "Error"}: ${err?.message ?? String(err)}`,
+          durationMs: dur,
+        });
+      }
+    }
+
+    // RELATÓRIO MARKDOWN
+    const total = results.length;
+    const okCount = results.filter((r) => r.status === "ok").length;
+    const failed = results.filter((r) => r.status === "fail");
+    const now = new Date();
+    const header = [
+      `# Diagnóstico HeyGen LiveAvatar — Renante`,
+      ``,
+      `**Data:** ${now.toLocaleString()}`,
+      `**Resumo:** ${okCount} de ${total} testes OK`,
+      failed.length
+        ? `**Falhas (${failed.length}):** ${failed.map((f) => f.title).join(", ")}`
+        : `**Falhas:** nenhuma 🎉`,
+      ``,
+      `---`,
+      ``,
+    ].join("\n");
+    const body = results
+      .map((r) => {
+        const tag =
+          r.status === "ok" ? "✅ OK" : r.status === "fail" ? "❌ FALHOU" : r.status === "warn" ? "⚠️ AVISO" : "ℹ️ INFO";
+        const meta = [
+          r.httpStatus !== undefined ? `HTTP ${r.httpStatus}` : null,
+          r.durationMs !== undefined ? `${r.durationMs} ms` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return [
+          `## ${tag} — ${r.title}${meta ? ` (${meta})` : ""}`,
+          ``,
+          "```",
+          r.detail,
+          "```",
+          ``,
+        ].join("\n");
+      })
+      .join("\n");
+    setDiagReport(header + body);
+    setDiagRunning(false);
+  }, [statuses, webrtcState]);
+
+  const copyDiagReport = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(diagReport);
+      setDiagCopied(true);
+      setTimeout(() => setDiagCopied(false), 1800);
+    } catch {
+      setDiagCopied(false);
+    }
+  }, [diagReport]);
+
+
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
