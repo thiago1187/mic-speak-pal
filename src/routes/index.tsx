@@ -178,10 +178,13 @@ function Index() {
   const finalTranscriptRef = useRef("");
   const lastTranscriptRef = useRef("");
   const handleSendRef = useRef<((rawText?: string) => Promise<void>) | null>(null);
+  const handleVoiceUtteranceRef = useRef<((text: string) => Promise<void>) | null>(null);
   const isAvatarSpeakingRef = useRef(false);
   const isMutedRef = useRef(true);
   const shouldListenRef = useRef(false);
   const micPermissionGrantedRef = useRef(false);
+  const bargeInRef = useRef(false);
+  const meetingActiveRef = useRef(false);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
