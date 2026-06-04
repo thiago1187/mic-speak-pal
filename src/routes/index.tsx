@@ -1546,7 +1546,7 @@ function Index() {
                   </span>
                 </div>
               </div>
-              {!window.isSecureContext && (
+              {typeof window !== "undefined" && !window.isSecureContext && (
                 <div className="mt-2 text-xs text-destructive">
                   ⚠️ Página não está em HTTPS — microfone bloqueado.
                 </div>
