@@ -637,21 +637,19 @@ function Index() {
       session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () => {
         isAvatarSpeakingRef.current = true;
         setAvatarSpeaking(true);
-        log("avatar começou a falar", "ok");
-        pauseRecognitionForAvatar();
+        log("avatar começou a falar (mic permanece ligado; confiando em EC)", "ok");
       });
       session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () => {
         isAvatarSpeakingRef.current = false;
         setAvatarSpeaking(false);
         log("avatar terminou de falar", "ok");
-        if (shouldListenRef.current && !isMutedRef.current) {
-          log("mic reativado");
-          maybeStartListening("avatar.speak_ended");
+        if (modeRef.current === "entrevistador" && shouldListenRef.current && !isMutedRef.current) {
+          maybeStartListening("entrevistador: pronto pra resposta");
         }
       });
       log(`Eventos SDK registrados: ${[...sessionEvents, ...agentEvents].join(", ")}`, "ok");
     },
-    [attemptVideoPlay, log, logError, maybeStartListening, pauseRecognitionForAvatar, setStatus],
+    [attemptVideoPlay, log, logError, maybeStartListening, setStatus],
   );
 
   const startSession = useCallback(async () => {
