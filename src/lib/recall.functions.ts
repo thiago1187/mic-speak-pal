@@ -40,17 +40,17 @@ export const recallCreateBot = createServerFn({ method: "POST" })
       // A máquina padrão do bot derruba frames → trava. Sobe pra uma maior só aqui
       // (Camada 3). Camadas 1/2 não usam output_media e seguem na máquina padrão.
       body.variant = { google_meet: "web_4_core" };
-      // Transcrição REALTIME do próprio Recall (não depende do CC do Meet estar
-      // ligado, ao contrário do meeting_captions). É isso que alimenta o WebSocket
-      // que a página /meet escuta → faz o avatar "ouvir" a reunião.
+      // Transcrição REALTIME via Deepgram (streaming) — rápida E suporta português,
+      // ao contrário do recallai_streaming (cujo modo PT é lento). É isso que
+      // alimenta o WebSocket que a página /meet escuta → o avatar "ouve" rápido.
+      // A API KEY do Deepgram fica no PAINEL do Recall (dashboard/transcription),
+      // não aqui — o Recall usa a credencial salva.
       body.recording_config = {
         transcript: {
           provider: {
-            recallai_streaming: {
-              // low_latency só suporta inglês; pra PT usamos accuracy (ainda é
-              // streaming/realtime, só prioriza acerto em vez de latência mínima).
-              mode: "prioritize_accuracy",
-              language_code: "pt",
+            deepgram_streaming: {
+              language: "pt-BR",
+              model: "nova-2",
             },
           },
         },
