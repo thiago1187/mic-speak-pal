@@ -604,11 +604,17 @@ function Index() {
     isMutedRef.current = true;
     setMuted(true);
     shouldListenRef.current = false;
+    if (micTestTimerRef.current !== null) {
+      window.clearInterval(micTestTimerRef.current);
+      micTestTimerRef.current = null;
+      setMicTestRemaining(0);
+    }
     try {
       recognitionRef.current?.stop();
     } catch (error) {
       logError("recognition.stop() falhou ao mutar", error);
     }
+    setMicState("desligado");
     setStatus(
       "microphone",
       speechSupported ? (micPermissionGrantedRef.current ? "ok" : "waiting") : "err",
