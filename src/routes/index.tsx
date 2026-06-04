@@ -1839,6 +1839,34 @@ function Index() {
                 {liveTranscript || micLastInterim}
               </div>
             )}
+
+            {/* Painel de comandos de voz (apenas Reunião) */}
+            {mode === "reuniao" && (
+              <div className="absolute right-4 top-4 w-72 rounded-lg border border-white/15 bg-black/60 p-3 text-[11px] text-white/80 backdrop-blur">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-semibold text-white">Comandos de voz</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      meetingActive
+                        ? "bg-emerald-500/20 text-emerald-300"
+                        : "bg-white/10 text-white/70"
+                    }`}
+                  >
+                    {meetingActive ? "● Ativo (respondendo)" : "○ Dormindo (só ouvindo)"}
+                  </span>
+                </div>
+                <div className="space-y-1.5 leading-snug">
+                  <div>
+                    <span className="text-emerald-300">Ativar:</span>{" "}
+                    <span className="text-white/70">"oi Renante", "olá Renan", "ei Dante" ou só o nome</span>
+                  </div>
+                  <div>
+                    <span className="text-white/60">Desativar:</span>{" "}
+                    <span className="text-white/70">"desligar Renante", "tchau Renan", "valeu Dante" ou "pode parar"</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Text fallback */}
