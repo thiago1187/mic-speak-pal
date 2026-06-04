@@ -922,6 +922,10 @@ function Index() {
         `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
       );
 
+      // Dispara filler e agente NO MESMO INSTANTE, em paralelo.
+      const sendTs =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+
       const renanteP = fetch(renanteUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -971,34 +975,40 @@ function Index() {
         return;
       }
 
-      // REGRA DO VAZIO: aguarda renante primeiro; se vazio, não fala nem filler.
-      const renanteJson: any = await renanteP;
-      const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
-        .toString()
-        .trim();
-      if (!renanteText) {
-        log(
-          `output vazio — avatar fica calado e filler descartado. Payload=${safeStringify(renanteJson)}`,
-        );
-        // Drena promessa do filler pra não vazar
-        void fillerP;
-        return;
-      }
-
+      // Assim que o filler chegar e for não-vazio, fala IMEDIATAMENTE (sem esperar agente).
+      let fillerSpeakP: Promise<void> | null = null;
       if (useFiller) {
-        const fillerJson: any = await fillerP;
-        const fillerText = (fillerJson?.filler ?? "").toString().trim();
-        log(`filler recebido: "${fillerText}"`, "ok");
-        if (fillerText) {
+        fillerSpeakP = fillerP.then(async (fillerJson: any) => {
+          const fillerText = (fillerJson?.filler ?? "").toString().trim();
+          if (!fillerText) {
+            log("filler vazio/SKIP — pulando direto pra resposta");
+            return;
+          }
+          const now =
+            typeof performance !== "undefined" ? performance.now() : Date.now();
+          const dt = Math.round(now - sendTs);
+          log(`filler pronto em ${dt}ms — falando: "${fillerText}"`, "ok");
           try {
             await speakAndWait(fillerText);
           } catch (error) {
             logError("erro speak_text filler", error);
           }
-        } else {
-          log("filler vazio — pulando direto pra resposta");
-        }
+        });
       }
+
+      // Aguarda agente. Se vazio, deixa o filler terminar e sai (sem resposta).
+      const renanteJson: any = await renanteP;
+      const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
+        .toString()
+        .trim();
+      if (!renanteText) {
+        log(`output vazio — sem resposta do agente. Payload=${safeStringify(renanteJson)}`);
+        if (fillerSpeakP) await fillerSpeakP.catch(() => {});
+        return;
+      }
+
+      // Espera o filler terminar (speak_ended) antes de falar a resposta.
+      if (fillerSpeakP) await fillerSpeakP.catch(() => {});
 
       log(`resposta Renante: "${renanteText}"`, "ok");
       try {
