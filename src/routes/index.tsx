@@ -1285,6 +1285,13 @@ function Index() {
   // Polling do transcript do Recall (CAMADA 2)
   useEffect(() => {
     if (!botId) return;
+    // CAMADA 3: o avatar está DENTRO do Meet e a página /meet cuida da transcrição
+    // pelo WebSocket do Recall. O polling local aqui é desnecessário (e ainda bate
+    // num endpoint legado do Recall = HTTP 400 repetido). Então não roda nesse modo.
+    if (avatarInMeetRef.current) {
+      log("[CAMADA 3] polling local de transcript desativado (a página /meet usa o WebSocket do Recall).");
+      return;
+    }
     let stopped = false;
     const poll = async () => {
       if (stopped || !botIdRef.current) return;
