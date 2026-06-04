@@ -877,8 +877,6 @@ function Index() {
         method: "POST",
         body: JSON.stringify(body),
       })
-        body: JSON.stringify(body),
-      })
         .then(async (response) => {
           const txt = await response.text();
           log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${txt}`);
