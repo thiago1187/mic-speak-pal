@@ -922,6 +922,10 @@ function Index() {
         `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
       );
 
+      // Dispara filler e agente NO MESMO INSTANTE, em paralelo.
+      const sendTs =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+
       const renanteP = fetch(renanteUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -971,34 +975,40 @@ function Index() {
         return;
       }
 
-      // REGRA DO VAZIO: aguarda renante primeiro; se vazio, não fala nem filler.
-      const renanteJson: any = await renanteP;
-      const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
-        .toString()
-        .trim();
-      if (!renanteText) {
-        log(
-          `output vazio — avatar fica calado e filler descartado. Payload=${safeStringify(renanteJson)}`,
-        );
-        // Drena promessa do filler pra não vazar
-        void fillerP;
-        return;
-      }
-
+      // Assim que o filler chegar e for não-vazio, fala IMEDIATAMENTE (sem esperar agente).
+      let fillerSpeakP: Promise<void> | null = null;
       if (useFiller) {
-        const fillerJson: any = await fillerP;
-        const fillerText = (fillerJson?.filler ?? "").toString().trim();
-        log(`filler recebido: "${fillerText}"`, "ok");
-        if (fillerText) {
+        fillerSpeakP = fillerP.then(async (fillerJson: any) => {
+          const fillerText = (fillerJson?.filler ?? "").toString().trim();
+          if (!fillerText) {
+            log("filler vazio/SKIP — pulando direto pra resposta");
+            return;
+          }
+          const now =
+            typeof performance !== "undefined" ? performance.now() : Date.now();
+          const dt = Math.round(now - sendTs);
+          log(`filler pronto em ${dt}ms — falando: "${fillerText}"`, "ok");
           try {
             await speakAndWait(fillerText);
           } catch (error) {
             logError("erro speak_text filler", error);
           }
-        } else {
-          log("filler vazio — pulando direto pra resposta");
-        }
+        });
       }
+
+      // Aguarda agente. Se vazio, deixa o filler terminar e sai (sem resposta).
+      const renanteJson: any = await renanteP;
+      const renanteText = (renanteJson?.output ?? renanteJson?.text ?? renanteJson?.message ?? "")
+        .toString()
+        .trim();
+      if (!renanteText) {
+        log(`output vazio — sem resposta do agente. Payload=${safeStringify(renanteJson)}`);
+        if (fillerSpeakP) await fillerSpeakP.catch(() => {});
+        return;
+      }
+
+      // Espera o filler terminar (speak_ended) antes de falar a resposta.
+      if (fillerSpeakP) await fillerSpeakP.catch(() => {});
 
       log(`resposta Renante: "${renanteText}"`, "ok");
       try {
@@ -1026,8 +1036,8 @@ function Index() {
         .replace(/[\u0300-\u036f]/g, "");
 
       if (currentMode === "reuniao") {
-        const wakeRe = /\b(ola |oi |ei |hey |alo )?renante\b/;
-        const endRe = /\b(encerra|encerrar|pode parar|valeu renante|tchau renante|obrigado renante)\b/;
+        const wakeRe = /\b(ola |oi |ei |hey |alo )?(renante|renan|dante)\b/;
+        const endRe = /\b(desligar (renante|renan|dante)|tchau (renante|renan|dante)|valeu (renante|renan|dante)|obrigado (renante|renan|dante)|encerra|encerrar|pode parar)\b/;
         const hasWake = wakeRe.test(low);
         const hasEnd = endRe.test(low);
 
@@ -1827,6 +1837,34 @@ function Index() {
             {(liveTranscript || micLastInterim) && (
               <div className="pointer-events-none absolute bottom-28 left-1/2 max-w-3xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white">
                 {liveTranscript || micLastInterim}
+              </div>
+            )}
+
+            {/* Painel de comandos de voz (apenas Reunião) */}
+            {mode === "reuniao" && (
+              <div className="absolute right-4 top-4 w-72 rounded-lg border border-white/15 bg-black/60 p-3 text-[11px] text-white/80 backdrop-blur">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-semibold text-white">Comandos de voz</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      meetingActive
+                        ? "bg-emerald-500/20 text-emerald-300"
+                        : "bg-white/10 text-white/70"
+                    }`}
+                  >
+                    {meetingActive ? "● Ativo (respondendo)" : "○ Dormindo (só ouvindo)"}
+                  </span>
+                </div>
+                <div className="space-y-1.5 leading-snug">
+                  <div>
+                    <span className="text-emerald-300">Ativar:</span>{" "}
+                    <span className="text-white/70">"oi Renante", "olá Renan", "ei Dante" ou só o nome</span>
+                  </div>
+                  <div>
+                    <span className="text-white/60">Desativar:</span>{" "}
+                    <span className="text-white/70">"desligar Renante", "tchau Renan", "valeu Dante" ou "pode parar"</span>
+                  </div>
+                </div>
               </div>
             )}
           </div>
