@@ -1056,29 +1056,79 @@ function Index() {
         .replace(/[\u0300-\u036f]/g, "");
 
       if (currentMode === "reuniao") {
-        const wakeRe = /\b(ola |oi |ei |hey |alo )?(renante|renan|dante)\b/;
-        const endRe = /\b(desligar (renante|renan|dante)|tchau (renante|renan|dante)|valeu (renante|renan|dante)|obrigado (renante|renan|dante)|encerra|encerrar|pode parar)\b/;
-        const hasWake = wakeRe.test(low);
-        const hasEnd = endRe.test(low);
+        // ===== REGRA DE OURO: classifica LOCALMENTE antes de chamar qualquer webhook. =====
+        // `low` já está normalizado (minúsculas, sem acento). 2 estados: DORMINDO/ATIVO.
+        const isActive = meetingActiveRef.current;
 
-        if (hasEnd && meetingActiveRef.current) {
+        // Wake word tolerante às variações do reconhecimento de voz.
+        const wakeRe = /\b(renante|renan|renando|renato|render|dante|dante)\b/;
+        const hasWake = wakeRe.test(low);
+
+        // Comando de desligar: correspondência FLEXÍVEL (a fala CONTÉM algo disto),
+        // com ou sem o nome. Palavras curtas usam limite de palavra p/ evitar falso
+        // positivo (ex.: "chegamos" não vira "chega").
+        const endRe =
+          /\b(desligar|desliga|pode desligar|pode parar|pode encerrar|encerra|encerrar|para (renante|renan|renato|render|dante)|chega|tchau|pode ir|era so isso|obrigado por enquanto|dispensar|ja chega|ja deu)\b/;
+        let hasEnd = endRe.test(low);
+        // "valeu"/"obrigado" sozinhos só contam como desligar quando ATIVO.
+        if (!hasEnd && isActive && /\b(valeu|vlw|obrigado|obrigada|brigado)\b/.test(low)) {
+          hasEnd = true;
+        }
+
+        // CASO 2 — ATIVO + desligar → DORMINDO + despedida FIXA do app.
+        // NÃO chama filler, NÃO chama agente, NÃO chama webhook nenhum.
+        if (isActive && hasEnd) {
           meetingActiveRef.current = false;
-          log(`Reunião: comando de encerrar detectado ("${t}") → DORMINDO`, "ok");
+          setMeetingActive(false);
+          log(`Reunião: → DORMINDO (comando de desligar: "${t}")`, "ok");
+          try {
+            await speakAndWait("Beleza, tô saindo. É só me chamar.");
+          } catch (e) {
+            logError("despedida (desligar)", e);
+          }
+          return;
         }
-        let responder = meetingActiveRef.current;
-        if (!meetingActiveRef.current && hasWake) {
+
+        // CASO 1 — DORMINDO + wake word (e não é um adeus a outra pessoa) → ATIVO.
+        if (!isActive && hasWake && !hasEnd) {
           meetingActiveRef.current = true;
-          responder = true;
-          log(`Reunião: wake word detectada ("${t}") → ATIVO`, "ok");
+          setMeetingActive(true);
+          log(`Reunião: → ATIVO (wake word detectada: "${t}")`, "ok");
+          // Veio pergunta junto com o nome? Tira saudação/nome e vê se sobra conteúdo.
+          const resto = low
+            .replace(/\b(ola|oi|ei|hey|alo|e ai|eai|opa|fala)\b/g, " ")
+            .replace(/\b(renante|renan|renando|renato|render|dante|dante)\b/g, " ")
+            .replace(/[^a-z0-9]+/g, " ")
+            .trim();
+          if (resto.length >= 4) {
+            // Tem pergunta junto com o nome → manda pro agente (filler + agente).
+            await handleSend(t, { responder: true });
+          } else {
+            // Só chamou o nome → saudação FIXA do app, sem n8n.
+            try {
+              await speakAndWait("Oi, tô aqui!");
+            } catch (e) {
+              logError("saudação (wake)", e);
+            }
+          }
+          return;
         }
-        await handleSend(t, { responder });
+
+        // CASO 3 — ATIVO + fala normal → filler + agente em paralelo (responder:true).
+        if (isActive) {
+          await handleSend(t, { responder: true });
+          return;
+        }
+
+        // CASO 4 — DORMINDO + fala normal → grava contexto (responder:false), sem filler/fala.
+        await handleSend(t, { responder: false });
         return;
       }
 
       // Conversa e Entrevistador: fluxo padrão.
       await handleSend(t);
     },
-    [handleSend, log],
+    [handleSend, log, speakAndWait, logError],
   );
 
   useEffect(() => {
@@ -1190,6 +1240,30 @@ function Index() {
       setBotJoining(false);
     }
   }, [callCreateBot, log, logError]);
+
+  // Abre a MESMA página /meet (com ?debug=1) no navegador do usuário, pra conferir
+  // visualmente se o avatar carrega — diagnóstico da tela preta na Camada 3.
+  const openAvatarPageTest = useCallback(() => {
+    const s = settingsRef.current;
+    if (!s.avatarBaseUrl) {
+      log('Teste: "URL pública do avatar" vazia (Configurações).', "err");
+      return;
+    }
+    const base = s.avatarBaseUrl.replace(/\/+$/, "");
+    const qs = new URLSearchParams({
+      apiKey: s.apiKey,
+      avatarId: s.avatarId,
+      voiceId: s.voiceId,
+      contextId: s.contextId,
+      language: s.language,
+      wr: s.webhookReuniao,
+      wf: s.webhookFiller,
+      debug: "1",
+    });
+    const url = `${base}/meet?${qs.toString()}`;
+    log(`Teste: abrindo página do avatar em nova aba (?debug=1)`);
+    window.open(url, "_blank", "noopener");
+  }, [log]);
 
   const leaveMeetingWithBot = useCallback(async () => {
     const s = settingsRef.current;
@@ -2238,6 +2312,14 @@ function Index() {
                     className="rounded-md bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground disabled:opacity-50"
                   >
                     {botJoining ? "Entrando…" : "Entrar com avatar no Meet (Camada 3)"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openAvatarPageTest}
+                    title="Abre a página /meet no seu navegador (com logs) pra testar se o avatar carrega"
+                    className="rounded-md border border-border px-4 py-2 text-sm"
+                  >
+                    🔍 Testar página do avatar
                   </button>
                   {botId && (
                     <button

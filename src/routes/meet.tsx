@@ -78,6 +78,8 @@ function MeetAvatar() {
   const [speaking, setSpeaking] = useState(false);
   const [active, setActive] = useState(false);
   const [needsGesture, setNeedsGesture] = useState(false);
+  // Por padrão a página é LIMPA (só o avatar, cara de câmera). HUD/logs só com ?debug=1.
+  const [debug, setDebug] = useState(false);
 
   const log = useCallback((msg: string, kind: "info" | "err" | "ok" = "info") => {
     const line = `${new Date().toISOString()} [MEET] ${msg}`;
@@ -262,25 +264,35 @@ function MeetAvatar() {
     [handleSend, log],
   );
 
-  // ---- play do vídeo (com fallback de gesto p/ humano; Recall autoplaya) ----
+  // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
+  // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
+  // que o áudio do avatar seja captado e entre na reunião. ----
   const tryPlay = useCallback(async () => {
     const v = videoRef.current;
     if (!v) return;
-    try {
-      v.muted = false;
-      v.autoplay = true;
-      v.playsInline = true;
-      await v.play();
-      setNeedsGesture(false);
-    } catch {
-      setNeedsGesture(true);
+    v.muted = false;
+    v.autoplay = true;
+    v.playsInline = true;
+    for (let i = 0; i < 12; i++) {
+      try {
+        await v.play();
+      } catch {
+        // autoplay pode ser bloqueado por um instante; tenta de novo
+      }
+      if (!v.paused) {
+        setNeedsGesture(false);
+        return;
+      }
+      await new Promise((r) => window.setTimeout(r, 400));
     }
+    setNeedsGesture(true);
   }, []);
 
   // ---- bootstrap ----
   useEffect(() => {
     const cfg = readConfig();
     cfgRef.current = cfg;
+    setDebug(new URLSearchParams(window.location.search).get("debug") === "1");
 
     const missing = (
       ["apiKey", "avatarId", "voiceId", "contextId", "webhookReuniao"] as (keyof Cfg)[]
@@ -403,43 +415,50 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
+      {/* SÓ o avatar, ocupando a tela toda — vira a "câmera" do bot na reunião.
+          onClick é só fallback p/ humano (autoplay com áudio bloqueado). */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
+        onClick={() => void tryPlay()}
         className="h-full w-full object-cover"
       />
 
-      {needsGesture && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-          <button
-            onClick={() => void tryPlay()}
-            className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
-          >
-            ▶️ Iniciar avatar
-          </button>
-        </div>
-      )}
+      {/* Tudo abaixo é APENAS no modo de depuração (?debug=1). Na reunião fica limpo. */}
+      {debug && (
+        <>
+          {needsGesture && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+              <button
+                onClick={() => void tryPlay()}
+                className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
+              >
+                ▶️ Iniciar avatar
+              </button>
+            </div>
+          )}
 
-      {/* HUD discreto (some na reunião — fica fora da safezone) */}
-      <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90">
-        <span
-          className={`h-2.5 w-2.5 rounded-full ${
-            speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/40"
-          }`}
-        />
-        <span>{speaking ? "falando…" : active ? "ativo" : "ouvindo"}</span>
-        <span className="text-white/50">·</span>
-        <span className="text-white/60">{status}</span>
-      </div>
-
-      <div className="absolute bottom-3 left-3 max-h-40 w-[28rem] max-w-[90vw] overflow-auto rounded-md bg-black/50 p-2 font-mono text-[10px] leading-snug text-white/70">
-        {logs.slice(-25).map((l, i) => (
-          <div key={`${l.t}-${i}`} className={l.kind === "err" ? "text-red-300" : l.kind === "ok" ? "text-emerald-300" : ""}>
-            [{new Date(l.t).toLocaleTimeString()}] {l.msg}
+          <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/40"
+              }`}
+            />
+            <span>{speaking ? "falando…" : active ? "ativo" : "ouvindo"}</span>
+            <span className="text-white/50">·</span>
+            <span className="text-white/60">{status}</span>
           </div>
-        ))}
-      </div>
+
+          <div className="absolute bottom-3 left-3 max-h-40 w-[28rem] max-w-[90vw] overflow-auto rounded-md bg-black/50 p-2 font-mono text-[10px] leading-snug text-white/70">
+            {logs.slice(-25).map((l, i) => (
+              <div key={`${l.t}-${i}`} className={l.kind === "err" ? "text-red-300" : l.kind === "ok" ? "text-emerald-300" : ""}>
+                [{new Date(l.t).toLocaleTimeString()}] {l.msg}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
