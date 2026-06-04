@@ -875,7 +875,6 @@ function Index() {
 
       const renanteP = fetch(renanteUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       })
         .then(async (response) => {
@@ -896,7 +895,6 @@ function Index() {
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question }),
           })
             .then(async (response) => {
@@ -1216,7 +1214,6 @@ function Index() {
       try {
         const res = await fetch(t.url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(t.body),
         });
         const dur = Math.round(performance.now() - t0);
