@@ -512,8 +512,16 @@ function Index() {
           lastTranscriptRef.current = "";
           recognitionRef.current.start();
           log(`recognition.start(): ${reason}`);
-        } catch (error) {
-          logError(`recognition.start() falhou (${reason})`, error);
+        } catch (error: any) {
+          // Corrida start()↔onstart: o reconhecimento já tinha começado. Não é erro
+          // real — só sincroniza o estado (o onstart/onend mantêm o resto consistente).
+          if (error?.name === "InvalidStateError") {
+            isRecognitionRunningRef.current = true;
+            setListening(true);
+            log(`recognition já estava ativo (${reason}); estado sincronizado`);
+          } else {
+            logError(`recognition.start() falhou (${reason})`, error);
+          }
         }
       } else {
         log(
