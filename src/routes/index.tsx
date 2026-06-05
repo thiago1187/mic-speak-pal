@@ -282,6 +282,10 @@ function Index() {
   const micPermissionGrantedRef = useRef(false);
   const bargeInRef = useRef(false);
   const meetingActiveRef = useRef(false);
+  // Entrevistador: quem está sendo entrevistado (vai no body do webhook).
+  const entrevistadoRef = useRef<"convidado" | "renan">("convidado");
+  // Filler: histórico das últimas 3 respostas não-vazias da sessão (FIFO, em memória).
+  const fillerHistoryRef = useRef<string[]>([]);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
@@ -291,6 +295,9 @@ function Index() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [mode, setMode] = useState<Mode>("conversa");
+  // Entrevistador: seletor de quem está sendo entrevistado + se já começou.
+  const [entrevistado, setEntrevistado] = useState<"convidado" | "renan">("convidado");
+  const [interviewStarted, setInterviewStarted] = useState(false);
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const modeRef = useRef<Mode>("conversa");
 
@@ -307,6 +314,10 @@ function Index() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    entrevistadoRef.current = entrevistado;
+  }, [entrevistado]);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -397,6 +408,9 @@ function Index() {
     }
     interviewerBufferRef.current = "";
     setInterviewerWaiting(false);
+    // Nova sessão de modo: zera histórico do filler e o flag de entrevista iniciada.
+    fillerHistoryRef.current = [];
+    setInterviewStarted(false);
   }, [mode]);
 
   const log = useCallback((msg: string, kind: LogEntry["kind"] = "info") => {
@@ -1068,6 +1082,11 @@ function Index() {
 
       const body: Record<string, unknown> = { question, sessionId: currentMode };
       if (responder !== undefined) body.responder = responder;
+      // AJUSTE 1 — Entrevistador: quem está sendo entrevistado + marca início.
+      if (currentMode === "entrevistador") {
+        body.entrevistado = entrevistadoRef.current;
+        setInterviewStarted(true);
+      }
       log(
         `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
       );
@@ -1096,11 +1115,22 @@ function Index() {
           return { output: "" };
         });
 
+      // AJUSTES 2 e 3 — filler com sessionId + histórico das últimas 3 (FIFO).
+      const fillerHistorico = [...fillerHistoryRef.current];
+      if (useFiller) {
+        log(
+          `filler enviado: question="${question}", sessionId="${currentMode}", historico_filler.length=${fillerHistorico.length}`,
+        );
+      }
       const fillerP = useFiller
         ? fetch(s.webhookFiller, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({
+              question,
+              sessionId: currentMode,
+              historico_filler: fillerHistorico,
+            }),
           })
             .then(async (response) => {
               const txt = await response.text();
@@ -1134,6 +1164,8 @@ function Index() {
             log("filler vazio/SKIP — pulando direto pra resposta");
             return;
           }
+          // AJUSTE 2 — guarda no histórico (FIFO 3) só os fillers não-vazios.
+          fillerHistoryRef.current = [...fillerHistoryRef.current, fillerText].slice(-3);
           const now =
             typeof performance !== "undefined" ? performance.now() : Date.now();
           const dt = Math.round(now - sendTs);
@@ -1915,6 +1947,45 @@ function Index() {
             Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.
           </div>
         )}
+
+        {/* AJUSTE 1 — Seletor "Convidado / Renan" (só no modo Entrevistador). */}
+        {mode === "entrevistador" &&
+          (!interviewStarted ? (
+            <div className="rounded-lg border border-primary/40 bg-card p-4">
+              <div className="mb-2 text-sm font-semibold">Quem vai ser entrevistado?</div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["convidado", "Convidado"],
+                    ["renan", "Renan"],
+                  ] as ["convidado" | "renan", string][]
+                ).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setEntrevistado(val)}
+                    className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
+                      entrevistado === val
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-muted-foreground">
+                Define quem está sendo entrevistado nesta sessão. Some quando a entrevista começa.
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 self-start rounded-full border border-border bg-card px-3 py-1 text-xs">
+              <span className="text-muted-foreground">Entrevistando:</span>
+              <span className="font-semibold">
+                {entrevistado === "renan" ? "Renan" : "Convidado"}
+              </span>
+            </div>
+          ))}
 
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
           <div className="flex flex-col gap-3">

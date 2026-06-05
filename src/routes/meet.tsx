@@ -88,6 +88,11 @@ function MeetAvatar() {
   // Buffer + timer de silêncio: acumula os trechos e só envia quando a pessoa para.
   const meetBufferRef = useRef("");
   const meetSilenceTimerRef = useRef<number | null>(null);
+  // sessionId ÚNICO desta sessão de /meet (≠ app principal; evita colisão do filler).
+  // Usado tanto no webhook principal quanto no filler, pra a tool conectar os dois.
+  const meetSessionIdRef = useRef<string>("");
+  // Filler: histórico das últimas 3 respostas não-vazias (FIFO, em memória).
+  const fillerHistoryRef = useRef<string[]>([]);
   const handleTranscriptRef = useRef<
     ((text: string, speaker: string, isFinal: boolean) => void) | null
   >(null);
@@ -167,11 +172,13 @@ function MeetAvatar() {
   const handleSend = useCallback(
     async (question: string, responder: boolean) => {
       const s = cfgRef.current;
-      // sessionId = o modo (conversa/reuniao/entrevistador). `responder` só faz
-      // sentido no modo "wake" (Reunião); nos outros o avatar sempre responde.
-      const body: Record<string, unknown> = { question, sessionId: s.sid };
+      // sessionId ÚNICO desta sessão de /meet (não o modo), pra não colidir com o
+      // app principal e pra a tool conseguir ligar filler ↔ agente. `responder` só
+      // faz sentido no modo "wake" (Reunião); nos outros o avatar sempre responde.
+      const sessionId = meetSessionIdRef.current || `meet-${s.sid}`;
+      const body: Record<string, unknown> = { question, sessionId };
       if (s.meetMode === "wake") body.responder = responder;
-      log(`→ webhook ${s.sid} (responder=${responder}): "${question}"`);
+      log(`→ webhook ${s.sid} (sessionId=${sessionId}, responder=${responder}): "${question}"`);
 
       const sendTs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
@@ -203,11 +210,22 @@ function MeetAvatar() {
       }
 
       // Filler em paralelo: fala assim que chegar, sem esperar o agente.
+      // AJUSTES 2 e 3 — filler com sessionId próprio + histórico das últimas 3.
+      const fillerHistorico = [...fillerHistoryRef.current];
+      if (s.webhookFiller) {
+        log(
+          `filler enviado: question="${question}", sessionId="${sessionId}", historico_filler.length=${fillerHistorico.length}`,
+        );
+      }
       const fillerP = s.webhookFiller
         ? fetch(s.webhookFiller, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({
+              question,
+              sessionId,
+              historico_filler: fillerHistorico,
+            }),
           })
             .then(async (r) => {
               const t = await r.text();
@@ -230,6 +248,8 @@ function MeetAvatar() {
           log("filler vazio/SKIP — direto pra resposta");
           return;
         }
+        // AJUSTE 2 — guarda no histórico (FIFO 3) só os fillers não-vazios.
+        fillerHistoryRef.current = [...fillerHistoryRef.current, fillerText].slice(-3);
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         log(`filler pronto em ${Math.round(now - sendTs)}ms — falando: "${fillerText}"`, "ok");
         try {
@@ -412,6 +432,16 @@ function MeetAvatar() {
     const isDebug = new URLSearchParams(window.location.search).get("debug") === "1";
     debugRef.current = isDebug;
     setDebug(isDebug);
+
+    // sessionId único desta sessão de /meet (gerado uma vez, estável enquanto durar).
+    if (!meetSessionIdRef.current) {
+      const rnd =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.round(Number.MAX_SAFE_INTEGER * 0.5)}`;
+      meetSessionIdRef.current = `meet-${cfg.sid}-${rnd}`;
+      log(`sessionId desta sessão: ${meetSessionIdRef.current}`);
+    }
 
     const missing = (
       ["apiKey", "avatarId", "voiceId", "contextId", "webhookReuniao"] as (keyof Cfg)[]
