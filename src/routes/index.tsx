@@ -68,7 +68,7 @@ const DEFAULT_SETTINGS: Settings = {
   webhookEntrevistador: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-entrevistador",
   webhookFiller: "https://n8n.srv1435894.hstgr.cloud/webhook/filler",
   apiKey: "33003367-5918-11f1-8d28-066a7fa2e369",
-  avatarId: "17593eee-5774-419c-9923-64694d710c57",
+  avatarId: "f79bd86d-ec79-4ff6-85e9-2eee714eaa0e",
   voiceId: "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098",
   contextId: "620eb98d-45ae-4a6c-9971-2c0915b4c279",
   language: "pt",
