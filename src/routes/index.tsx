@@ -4,11 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import { getSessionToken } from "@/lib/heygen.functions";
 import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/recall.functions";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Renante AI" },
+      { title: "RenAnte Avatar AI — by GZero" },
       {
         name: "description",
         content: "Diagnóstico visível de LiveAvatar, vídeo, microfone e voz",
@@ -259,11 +265,43 @@ function StatusDot({ state }: { state: StatusKind }) {
   const color =
     state === "ok" ? "bg-status-ok" : state === "err" ? "bg-destructive" : "bg-status-waiting";
   return (
-    <span className="relative mt-1 flex h-3 w-3 shrink-0">
+    <span className="relative mt-0.5 flex h-4 w-4 shrink-0">
       <span
-        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${color}`}
+        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-90 ${color}`}
       />
-      <span className={`relative inline-flex h-3 w-3 rounded-full ${color}`} />
+      <span className={`relative inline-flex h-4 w-4 animate-pulse rounded-full ${color}`} />
+    </span>
+  );
+}
+
+// Logo da GZero. Usa /gzero-logo.gif (arquivo em public/); se a imagem não
+// carregar, cai num fallback textual "GZero" pra nunca quebrar o layout.
+function GZeroLogo({
+  variant,
+  className,
+  imgClassName,
+}: {
+  variant: "white" | "black";
+  className?: string;
+  imgClassName?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span
+      className={`inline-flex items-center rounded-md px-2 py-1 ${
+        variant === "white" ? "bg-white" : "bg-black"
+      } ${className ?? ""}`}
+    >
+      {failed ? (
+        <span className="font-extrabold tracking-tight text-pink-600">GZero</span>
+      ) : (
+        <img
+          src="/Logo-Rosa-GZero-2.gif"
+          alt="GZero"
+          onError={() => setFailed(true)}
+          className={imgClassName ?? "h-5 w-auto"}
+        />
+      )}
     </span>
   );
 }
@@ -303,6 +341,7 @@ function Index() {
   const [settingsDraft, setSettingsDraft] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<"avatar" | "webhooks" | "modos" | "meet">("avatar");
   const [mode, setMode] = useState<Mode>("conversa");
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
@@ -334,6 +373,16 @@ function Index() {
       window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settingsDraft));
     }
     setSettingsSaved(true);
+    setLastSavedAt(
+      new Date().toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
+    );
     setTimeout(() => setSettingsSaved(false), 1800);
   }, [settingsDraft]);
 
@@ -404,6 +453,13 @@ function Index() {
   useEffect(() => {
     bargeInRef.current = bargeIn;
   }, [bargeIn]);
+
+  // Aplica o barge-in configurado por modo também na chamada do próprio site.
+  // Ao trocar de modo (ou salvar config), o barge-in padrão do modo é aplicado;
+  // o usuário ainda pode sobrescrever manualmente no checkbox da tela.
+  useEffect(() => {
+    setBargeIn(settings.meetConfigs[mode]?.bargeIn ?? false);
+  }, [mode, settings]);
 
   // Espelha estado da Reunião pra UI; meetingActiveRef é a fonte da verdade.
   useEffect(() => {
@@ -814,8 +870,8 @@ function Index() {
     setMicState("desligado");
     setStatus(
       "microphone",
-      speechSupported ? (micPermissionGrantedRef.current ? "ok" : "waiting") : "err",
-      speechSupported ? "microfone mutado" : "Reconhecimento de voz não suportado",
+      speechSupported ? "waiting" : "err",
+      speechSupported ? "Microfone desligado" : "Reconhecimento de voz não suportado",
     );
     log("microfone mutado");
   }, [log, logError, setStatus, speechSupported]);
@@ -915,7 +971,9 @@ function Index() {
       });
       session.on(SessionEvent.SESSION_DISCONNECTED, (reason: any) => {
         setConnected(false);
+        setStatus("token", "waiting", "Sem sessão (clique em Conectar avatar)");
         setStatus("session", "waiting", `Desconectada: ${safeStringify(reason)}`);
+        setStatus("video", "waiting", "Sem stream");
       });
       session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, () => {
         isAvatarSpeakingRef.current = true;
@@ -1024,6 +1082,7 @@ function Index() {
     }
     sessionRef.current = null;
     setConnected(false);
+    setStatus("token", "waiting", "Sem sessão (clique em Conectar avatar)");
     setStatus("session", "waiting", "Sessão encerrada pelo usuário");
     setStatus("video", "waiting", "Sem stream");
     setWebrtcState("desconectado");
@@ -1253,7 +1312,12 @@ function Index() {
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "");
 
-      if (currentMode === "reuniao") {
+      // Comportamento por modo (vale também na chamada do próprio site, não só no Meet):
+      // "wake" = só responde após ser chamado pelo nome; "always" = responde tudo.
+      const modeCfg = settingsRef.current.meetConfigs[currentMode];
+      const useWake = modeCfg?.behavior === "wake";
+
+      if (useWake) {
         // ===== REGRA DE OURO: classifica LOCALMENTE antes de chamar qualquer webhook. =====
         // `low` já está normalizado (minúsculas, sem acento). 2 estados: DORMINDO/ATIVO.
         const isActive = meetingActiveRef.current;
@@ -1323,7 +1387,7 @@ function Index() {
         return;
       }
 
-      // Conversa e Entrevistador: fluxo padrão.
+      // Modo "always" (responde tudo): fluxo padrão.
       await handleSend(t);
     },
     [handleSend, log, speakAndWait, logError],
@@ -1914,12 +1978,16 @@ function Index() {
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
         <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h1 className="flex items-center gap-2 text-xl font-semibold md:text-2xl">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+            <h1 className="flex items-center gap-2.5 text-xl font-semibold md:text-2xl">
+              <span className="relative flex h-4 w-4">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-90" />
+                <span className="relative inline-flex h-4 w-4 animate-pulse rounded-full bg-primary shadow-[0_0_10px_3px] shadow-primary/70" />
               </span>
-              Renante AI
+              RenAnte Avatar AI
+              <span className="ml-1 flex items-center gap-1.5 text-sm font-bold text-pink-500">
+                by
+                <GZeroLogo variant="white" imgClassName="h-4 w-auto md:h-5" />
+              </span>
             </h1>
             <div className="flex items-center gap-3">
               <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
@@ -2076,9 +2144,9 @@ function Index() {
                       ? "Mic desligado"
                       : avatarSpeaking
                         ? "Avatar falando"
-                        : mode === "reuniao" && !meetingActive
+                        : settings.meetConfigs[mode]?.behavior === "wake" && !meetingActive
                           ? 'Dormindo (diga "Renante")'
-                          : mode === "reuniao" && meetingActive
+                          : settings.meetConfigs[mode]?.behavior === "wake" && meetingActive
                             ? "Sessão ativa"
                             : listening
                               ? "Ouvindo..."
@@ -2317,9 +2385,18 @@ function Index() {
               </div>
             )}
 
+            {/* Propaganda GZero — sapo na lateral direita (área preta da chamada).
+                A imagem já tem fundo preto; mix-blend-lighten faz o preto sumir e
+                deixa só o sapo/logo aparecendo, sem cobrir o avatar. */}
+            <img
+              src="/Gzero-Frog.png"
+              alt="GZero"
+              className="pointer-events-none absolute right-0 top-1/2 z-0 h-40 w-auto max-w-[18%] -translate-y-1/2 select-none object-contain opacity-95 mix-blend-lighten md:h-56"
+            />
+
             {/* Painel de comandos de voz (apenas Reunião) */}
             {mode === "reuniao" && (
-              <div className="absolute right-4 top-4 w-72 rounded-lg border border-white/15 bg-black/60 p-3 text-[11px] text-white/80 backdrop-blur">
+              <div className="absolute right-4 top-4 z-10 w-72 rounded-lg border border-white/15 bg-black/60 p-3 text-[11px] text-white/80 backdrop-blur">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="font-semibold text-white">Comandos de voz</span>
                   <span
@@ -2395,6 +2472,17 @@ function Index() {
               className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25 disabled:opacity-40"
             >
               ⏹
+            </button>
+            <button
+              onClick={toggleCaptions}
+              title={settings.captionsEnabled ? "Desativar legendas" : "Ativar legendas"}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
+                settings.captionsEnabled
+                  ? "bg-white/15 text-white hover:bg-white/25"
+                  : "bg-destructive text-destructive-foreground"
+              }`}
+            >
+              💬
             </button>
             <button
               onClick={toggleFullscreen}
@@ -2577,33 +2665,147 @@ function Index() {
               )}
 
               {settingsTab === "modos" && (
-              <fieldset className="space-y-3">
+              <fieldset className="space-y-4">
                 <legend className="text-sm font-semibold uppercase text-muted-foreground">
                   Modos & Comportamento
                 </legend>
-                <label className="block text-sm">
-                  <span className="mb-1 block font-medium">
-                    Tolerância de silêncio — Entrevistador (segundos)
-                  </span>
-                  <input
-                    type="number"
-                    min={0.5}
-                    step={0.5}
-                    value={settingsDraft.entrevistadorSilenceSec}
-                    onChange={(e) =>
+                <p className="text-xs text-muted-foreground">
+                  Cada modo tem sua própria saudação e comportamento. A <strong>fala inicial</strong>{" "}
+                  vale tanto na tela principal (ao conectar o avatar) quanto dentro do Google Meet
+                  (Camada 3). Clique em cada modo para expandir.
+                </p>
+
+                <Accordion
+                  type="single"
+                  collapsible
+                  defaultValue={mode}
+                  className="rounded-md border border-border px-3"
+                >
+                  {MODES.map((mm) => {
+                    const c = settingsDraft.meetConfigs[mm.id];
+                    const upd = (patch: Partial<MeetModeConfig>) =>
                       setSettingsDraft((d) => ({
                         ...d,
-                        entrevistadorSilenceSec: Number(e.target.value) || ENTREVISTADOR_SILENCE_SEC_DEFAULT,
-                      }))
-                    }
-                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
-                  />
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    Quanto tempo de silêncio aguardar antes de considerar que a pessoa
-                    terminou de responder (acumula as pausas pra pensar). Sugerido 2,5–3,5s.
-                    Só afeta o modo Entrevistador.
+                        meetConfigs: {
+                          ...d.meetConfigs,
+                          [mm.id]: { ...d.meetConfigs[mm.id], ...patch },
+                        },
+                      }));
+                    return (
+                      <AccordionItem key={mm.id} value={mm.id} className="last:border-b-0">
+                        <AccordionTrigger>
+                          <span className="flex items-center gap-2">
+                            <span className="font-semibold">{mm.label}</span>
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
+                              {c.behavior === "always" ? "sempre ativo" : "wake word"}
+                              {c.bargeIn ? " · barge-in" : ""}
+                            </span>
+                          </span>
+                        </AccordionTrigger>
+                        <AccordionContent className="space-y-3">
+                          <label className="block text-sm">
+                            <span className="mb-1 block text-xs font-medium">
+                              Fala inicial (ao entrar / ao conectar)
+                            </span>
+                            <textarea
+                              value={c.greeting}
+                              onChange={(e) => upd({ greeting: e.target.value })}
+                              rows={2}
+                              placeholder="Deixe vazio para não falar nada ao entrar"
+                              className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
+                            />
+                          </label>
+                          <label className="block text-sm">
+                            <span className="mb-1 block text-xs font-medium">Comportamento</span>
+                            <select
+                              value={c.behavior}
+                              onChange={(e) =>
+                                upd({ behavior: e.target.value === "always" ? "always" : "wake" })
+                              }
+                              className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                            >
+                              <option value="wake">Só quando chamado pelo nome (wake word)</option>
+                              <option value="always">Sempre ativo (responde tudo)</option>
+                            </select>
+                          </label>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={c.bargeIn}
+                              onChange={(e) => upd({ bargeIn: e.target.checked })}
+                            />
+                            Permitir interromper falando (barge-in)
+                          </label>
+                          {mm.id === "entrevistador" && (
+                            <label className="block text-sm">
+                              <span className="mb-1 block text-xs font-medium">
+                                Tolerância de silêncio (segundos)
+                              </span>
+                              <input
+                                type="number"
+                                min={0.5}
+                                step={0.5}
+                                value={settingsDraft.entrevistadorSilenceSec}
+                                onChange={(e) =>
+                                  setSettingsDraft((d) => ({
+                                    ...d,
+                                    entrevistadorSilenceSec:
+                                      Number(e.target.value) || ENTREVISTADOR_SILENCE_SEC_DEFAULT,
+                                  }))
+                                }
+                                className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                              />
+                              <span className="mt-1 block text-xs text-muted-foreground">
+                                Quanto tempo de silêncio aguardar antes de considerar que a pessoa
+                                terminou de responder (acumula as pausas pra pensar). Sugerido 2,5–3,5s.
+                              </span>
+                            </label>
+                          )}
+                        </AccordionContent>
+                      </AccordionItem>
+                    );
+                  })}
+                </Accordion>
+
+                <div className="space-y-3 rounded-md border border-border bg-background/40 p-3">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">
+                    Geral — dentro do Google Meet (Camada 3)
+                  </div>
+                  <label className="block text-sm">
+                    <span className="mb-1 block font-medium">Pausa antes de enviar (segundos)</span>
+                    <input
+                      type="number"
+                      min={0.2}
+                      step={0.1}
+                      value={settingsDraft.meetSilenceSec}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({
+                          ...d,
+                          meetSilenceSec: Number(e.target.value) || 0.5,
+                        }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      No Meet ele acumula sua fala e só manda pro n8n após esse silêncio
+                      (evita engolir/cortar). Vale pros 3 modos. Padrão 0,5s.
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settingsDraft.meetDebug}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({ ...d, meetDebug: e.target.checked }))
+                      }
+                    />
+                    Modo diagnóstico no Meet (mostra status na câmera do bot)
+                  </label>
+                  <span className="block text-xs text-muted-foreground">
+                    Use pra depurar: a câmera do Renante mostra se o WebSocket de transcrição
+                    conectou e o que está chegando. Desligue na demo real.
                   </span>
-                </label>
+                </div>
               </fieldset>
               )}
 
@@ -2651,103 +2853,11 @@ function Index() {
                   </span>
                 </label>
 
-                <div className="rounded-md border border-border bg-background/40 p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-                    Comportamento dentro do Google Meet (Camada 3)
-                  </div>
-                  <p className="mb-3 text-xs text-muted-foreground">
-                    No Meet não há botões — tudo é por voz e por estas configurações,
-                    aplicadas ao entrar. Há uma config <strong>por modo</strong>; você
-                    escolhe com qual subir no botão de entrar. Cada modo usa o webhook n8n
-                    do seu próprio modo.
-                  </p>
-
-                  {MODES.map((mm) => {
-                    const c = settingsDraft.meetConfigs[mm.id];
-                    const upd = (patch: Partial<MeetModeConfig>) =>
-                      setSettingsDraft((d) => ({
-                        ...d,
-                        meetConfigs: {
-                          ...d.meetConfigs,
-                          [mm.id]: { ...d.meetConfigs[mm.id], ...patch },
-                        },
-                      }));
-                    return (
-                      <div key={mm.id} className="mb-3 rounded-md border border-border bg-card p-3">
-                        <div className="mb-2 text-sm font-semibold">{mm.label}</div>
-                        <label className="mb-2 block text-sm">
-                          <span className="mb-1 block text-xs font-medium">Fala inicial (ao entrar)</span>
-                          <textarea
-                            value={c.greeting}
-                            onChange={(e) => upd({ greeting: e.target.value })}
-                            rows={2}
-                            placeholder="Deixe vazio para não falar nada ao entrar"
-                            className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
-                          />
-                        </label>
-                        <label className="mb-2 block text-sm">
-                          <span className="mb-1 block text-xs font-medium">Comportamento</span>
-                          <select
-                            value={c.behavior}
-                            onChange={(e) =>
-                              upd({ behavior: e.target.value === "always" ? "always" : "wake" })
-                            }
-                            className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
-                          >
-                            <option value="wake">Só quando chamado pelo nome (wake word)</option>
-                            <option value="always">Sempre ativo (responde tudo)</option>
-                          </select>
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={c.bargeIn}
-                            onChange={(e) => upd({ bargeIn: e.target.checked })}
-                          />
-                          Permitir interromper falando (barge-in)
-                        </label>
-                      </div>
-                    );
-                  })}
-
-                  <label className="mb-1 block text-sm">
-                    <span className="mb-1 block font-medium">
-                      Pausa antes de enviar (segundos)
-                    </span>
-                    <input
-                      type="number"
-                      min={0.2}
-                      step={0.1}
-                      value={settingsDraft.meetSilenceSec}
-                      onChange={(e) =>
-                        setSettingsDraft((d) => ({
-                          ...d,
-                          meetSilenceSec: Number(e.target.value) || 0.5,
-                        }))
-                      }
-                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
-                    />
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      No Meet ele acumula sua fala e só manda pro n8n após esse silêncio
-                      (evita engolir/cortar). Vale pros 3 modos. Padrão 0,5s.
-                    </span>
-                  </label>
-
-                  <label className="mt-3 flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={settingsDraft.meetDebug}
-                      onChange={(e) =>
-                        setSettingsDraft((d) => ({ ...d, meetDebug: e.target.checked }))
-                      }
-                    />
-                    Modo diagnóstico no Meet (mostra status na câmera do bot)
-                  </label>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    Use pra depurar: a câmera do Renante mostra se o WebSocket de
-                    transcrição conectou e o que está chegando. Desligue na demo real.
-                  </span>
-                </div>
+                <p className="rounded-md border border-border bg-background/40 p-3 text-xs text-muted-foreground">
+                  💡 A saudação e o comportamento de cada modo (fala inicial, wake word,
+                  barge-in, pausas) agora ficam na aba <strong>🎙️ Modos</strong>. Aqui você só
+                  configura a conexão com o Meet e entra na reunião.
+                </p>
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                   <label className="flex items-center gap-2 text-sm">
                     <span className="font-medium">Entrar como:</span>
@@ -2811,8 +2921,16 @@ function Index() {
               >
                 Restaurar padrões
               </button>
-              {settingsSaved && (
-                <span className="text-sm font-medium text-status-ok">Salvo!</span>
+              {lastSavedAt ? (
+                <span
+                  className={`text-sm font-medium ${
+                    settingsSaved ? "text-status-ok" : "text-muted-foreground"
+                  }`}
+                >
+                  {settingsSaved ? "✅ Salvo" : "Último salvamento"} em {lastSavedAt}
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">Nenhuma alteração salva ainda</span>
               )}
             </div>
           </div>
