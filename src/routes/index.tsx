@@ -30,6 +30,17 @@ const MODE_KEY = "liveavatar.mode.v1";
 // Entrevistador: pausa de silêncio (s) antes de considerar que a pessoa terminou.
 // Fallback caso a config não esteja salva. Ajustável na UI (entrevistadorSilenceSec).
 const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 3;
+// Hot-swap: tempo após (re)conectar para pré-aquecer uma NOVA sessão e trocar,
+// driblando o limite de duração por sessão do plano (Starter = 5 min, até 5 sessões
+// simultâneas). O "cérebro" (n8n) é independente da sessão HeyGen, então o contexto
+// é preservado. TESTE: 30s. PRODUÇÃO: trocar para 270_000 (4:30, folga antes dos 5 min).
+// Intervalo padrão (s) entre reconexões do hot-swap (configurável na UI em "Modos").
+// Cap do plano Starter = 5 min, então 270s (4:30) deixa folga. Mínimo aplicado abaixo.
+const HOT_SWAP_AFTER_SEC_DEFAULT = 270;
+const HOT_SWAP_MIN_SEC = 20; // tempo mínimo p/ dar conta de pré-aquecer a nova sessão
+// Quanto tempo, no máximo, esperar o avatar terminar a frase antes de forçar a troca.
+// Em produção (gatilho 4:30) isso ainda cabe antes do cap de 5 min (4:30 + 20s = 4:50).
+const HOT_SWAP_MAX_DEFER_MS = 20_000;
 
 type Mode = "conversa" | "reuniao" | "entrevistador";
 const MODES: { id: Mode; label: string }[] = [
@@ -62,10 +73,12 @@ type Settings = {
   meetDebug: boolean; // mostra diagnóstico (status do WebSocket) na câmera do bot
   meetSilenceSec: number; // pausa de silêncio (s) no Meet antes de mandar a fala pro n8n
   entrevistadorSilenceSec: number; // pausa de silêncio (s) antes de fechar a fala no Entrevistador
+  hotSwapAfterSec: number; // intervalo (s) entre reconexões automáticas (hot-swap)
 };
 
 type MeetModeConfig = {
-  greeting: string; // fala inicial ao entrar (vazio = não fala nada)
+  greeting: string; // fala inicial ao entrar/conectar (vazio = não fala nada)
+  reconnectGreeting: string; // fala ao reconectar no hot-swap (vazio = não fala nada)
   behavior: "wake" | "always"; // "wake" = só responde após o nome; "always" = responde tudo
   bargeIn: boolean; // permitir interromper a fala dele falando por cima
 };
@@ -89,16 +102,19 @@ const DEFAULT_SETTINGS: Settings = {
   meetConfigs: {
     conversa: {
       greeting: "Olá! Eu sou o Renante, da Gravidade Zero. Podem falar comigo à vontade.",
+      reconnectGreeting: "",
       behavior: "always",
       bargeIn: false,
     },
     reuniao: {
       greeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
+      reconnectGreeting: "",
       behavior: "wake",
       bargeIn: false,
     },
     entrevistador: {
       greeting: "Oi! Eu sou o Renante e vou conduzir essa conversa. Podem responder quando quiserem.",
+      reconnectGreeting: "",
       behavior: "always",
       bargeIn: false,
     },
@@ -106,6 +122,7 @@ const DEFAULT_SETTINGS: Settings = {
   meetDebug: false,
   meetSilenceSec: 0.5,
   entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
+  hotSwapAfterSec: HOT_SWAP_AFTER_SEC_DEFAULT,
 };
 
 function loadSettings(): Settings {
@@ -333,6 +350,14 @@ function Index() {
   const meetingActiveRef = useRef(false);
   // Filler: histórico das últimas 3 respostas não-vazias da sessão (FIFO, em memória).
   const fillerHistoryRef = useRef<string[]>([]);
+  // Hot-swap: reinício automático da sessão HeyGen preservando contexto (que vive no n8n).
+  const sessionStartedAtRef = useRef(0);
+  const swapInProgressRef = useRef(false);
+  const hotSwapTimerRef = useRef<number | null>(null);
+  const prewarmSwapRef = useRef<() => void>(() => {});
+  // Última fala de CONTEÚDO em andamento (texto + início), p/ retomar se um hot-swap
+  // forçado cortar no meio. Reconexão/saudações curtas não entram aqui.
+  const currentUtteranceRef = useRef<{ text: string; startedAt: number } | null>(null);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
@@ -945,6 +970,9 @@ function Index() {
       });
 
       session.on(SessionEvent.SESSION_STATE_CHANGED, (state: any) => {
+        // Durante o hot-swap a sessão antiga continua emitindo eventos: ignore-os
+        // para não rebaixar a UI enquanto a nova sessão assume.
+        if (session !== sessionRef.current) return;
         setStatus(
           "session",
           state === "CONNECTED" ? "ok" : state === "DISCONNECTED" ? "waiting" : "waiting",
@@ -970,6 +998,8 @@ function Index() {
         void attemptVideoPlay();
       });
       session.on(SessionEvent.SESSION_DISCONNECTED, (reason: any) => {
+        // Sessão antiga sendo descartada no hot-swap → não mexe na UI.
+        if (session !== sessionRef.current) return;
         setConnected(false);
         setStatus("token", "waiting", "Sem sessão (clique em Conectar avatar)");
         setStatus("session", "waiting", `Desconectada: ${safeStringify(reason)}`);
@@ -983,6 +1013,7 @@ function Index() {
       session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, () => {
         isAvatarSpeakingRef.current = false;
         setAvatarSpeaking(false);
+        if (session === sessionRef.current) currentUtteranceRef.current = null;
         log("avatar terminou de falar", "ok");
         if (modeRef.current === "entrevistador" && shouldListenRef.current && !isMutedRef.current) {
           maybeStartListening("entrevistador: pronto pra resposta");
@@ -992,6 +1023,173 @@ function Index() {
     },
     [attemptVideoPlay, log, logError, maybeStartListening, setStatus],
   );
+
+  // ===== HOT-SWAP (driblar o limite de duração por sessão do plano HeyGen) =====
+  // Como o "cérebro" (n8n) é independente da sessão HeyGen, trocar a sessão NÃO perde
+  // contexto. Pré-aquecemos uma 2ª sessão e, quando o vídeo dela estiver pronto, fazemos
+  // o swap do <video> e encerramos a antiga — com interrupção mínima.
+  const scheduleHotSwap = useCallback(() => {
+    if (hotSwapTimerRef.current !== null) window.clearTimeout(hotSwapTimerRef.current);
+    const sec = Math.max(
+      HOT_SWAP_MIN_SEC,
+      settingsRef.current.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT,
+    );
+    hotSwapTimerRef.current = window.setTimeout(() => {
+      prewarmSwapRef.current?.();
+    }, sec * 1000);
+    log(`HOT-SWAP agendado para daqui a ${sec}s`);
+  }, [log]);
+
+  const prewarmAndSwap = useCallback(async () => {
+    if (swapInProgressRef.current) return;
+    const oldSession = sessionRef.current;
+    if (!oldSession) return;
+    swapInProgressRef.current = true;
+
+    // Fala uma frase numa sessão específica e resolve quando ela termina (ou timeout).
+    const speakOn = (sess: LiveAvatarSession, txt: string) =>
+      new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          window.clearTimeout(timer);
+          try {
+            sess.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, finish);
+          } catch {}
+          resolve();
+        };
+        const timer = window.setTimeout(finish, SPEAK_TIMEOUT_MS);
+        sess.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, finish);
+        try {
+          sess.repeat(txt);
+        } catch {
+          finish();
+        }
+      });
+
+    try {
+      // 1) Se o avatar está falando, ESPERA terminar a frase (até um limite de segurança).
+      //    Só corta no meio se estourar esse limite (perto do cap de 5 min em produção).
+      let forcedCut = false;
+      if (isAvatarSpeakingRef.current) {
+        log("HOT-SWAP: avatar falando — aguardando ele terminar a frase…");
+        const ended = await new Promise<boolean>((resolve) => {
+          let done = false;
+          const finish = (val: boolean) => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timer);
+            try {
+              oldSession.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
+            } catch {}
+            resolve(val);
+          };
+          const onEnd = () => finish(true);
+          const timer = window.setTimeout(() => finish(false), HOT_SWAP_MAX_DEFER_MS);
+          oldSession.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
+        });
+        if (ended) {
+          log("HOT-SWAP: frase terminou — trocando em silêncio", "ok");
+        } else {
+          forcedCut = true;
+          log("HOT-SWAP: limite de espera atingido — vai cortar e retomar de onde parou", "ok");
+        }
+      }
+
+      // Guarda a fala em andamento p/ retomar SÓ se a troca cortar no meio.
+      const pending = forcedCut ? currentUtteranceRef.current : null;
+
+      log("HOT-SWAP: pré-aquecendo nova sessão (contexto preservado no n8n)…", "ok");
+      const s = settingsRef.current;
+      const tokenResult = await fetchToken({
+        data: {
+          apiKey: s.apiKey,
+          avatarId: s.avatarId,
+          voiceId: s.voiceId,
+          contextId: s.contextId,
+          language: s.language,
+        },
+      });
+      const newSession = new LiveAvatarSession(tokenResult.session_token, { voiceChat: false });
+      registerSdkEvents(newSession);
+      attachRoomDiagnostics(newSession);
+
+      // Quando o stream da NOVA sessão estiver pronto: promove e descarta a antiga.
+      const promote = () => {
+        newSession.off(SessionEvent.SESSION_STREAM_READY, promote);
+        // Tempo de fala consumido até o momento do corte (p/ estimar o que faltou).
+        const cutElapsedMs = pending ? Date.now() - pending.startedAt : 0;
+        try {
+          if (videoRef.current) newSession.attach(videoRef.current);
+        } catch (e) {
+          logError("HOT-SWAP: attach do vídeo falhou", e);
+        }
+        sessionRef.current = newSession;
+        sessionStartedAtRef.current = Date.now();
+        setStatus("token", "ok", `Renovada (hot-swap). session_id=${tokenResult.session_id}`);
+        setStatus("session", "ok", "Sessão renovada (hot-swap)");
+        log("HOT-SWAP: troca concluída ✅ (encerrando sessão antiga)", "ok");
+        // O DISCONNECTED da antiga é ignorado pelo guard de sessão em registerSdkEvents.
+        void oldSession.stop().catch((e) => logError("HOT-SWAP: stop da antiga falhou", e));
+        swapInProgressRef.current = false;
+        void attemptVideoPlay();
+        scheduleHotSwap(); // reagenda o próximo ciclo
+
+        // Suprime a saudação automática do HeyGen na NOVA sessão, fala a "fala ao
+        // reconectar" (se configurada) e, se a troca cortou no meio, retoma de onde parou.
+        void (async () => {
+          for (let i = 0; i < 4; i++) {
+            try {
+              (newSession as any)?.interrupt?.();
+            } catch {}
+            await new Promise((r) => window.setTimeout(r, 250));
+          }
+          const reconnectMsg = (
+            settingsRef.current.meetConfigs[modeRef.current]?.reconnectGreeting ?? ""
+          ).trim();
+          if (reconnectMsg) {
+            log(`HOT-SWAP: fala ao reconectar: "${reconnectMsg}"`, "ok");
+            await speakOn(newSession, reconnectMsg);
+          }
+          // Retomada: re-fala a parte que faltou da frase cortada (estimativa por tempo,
+          // recuando ~2 palavras para emendar com naturalidade).
+          if (pending?.text) {
+            const words = pending.text.trim().split(/\s+/).filter(Boolean);
+            const WORDS_PER_SEC = 2.7;
+            let spoken = Math.floor((cutElapsedMs / 1000) * WORDS_PER_SEC) - 2;
+            if (spoken < 0) spoken = 0;
+            const remaining = spoken < words.length ? words.slice(spoken).join(" ") : "";
+            if (remaining) {
+              log(`HOT-SWAP: retomando de onde parou: "${remaining}"`, "ok");
+              await speakOn(newSession, remaining);
+            }
+          }
+        })();
+      };
+      newSession.on(SessionEvent.SESSION_STREAM_READY, promote);
+
+      log("HOT-SWAP: start() da nova sessão…");
+      await newSession.start();
+    } catch (e) {
+      logError("HOT-SWAP falhou; mantendo a sessão atual (tenta de novo no próximo ciclo)", e);
+      swapInProgressRef.current = false;
+      scheduleHotSwap();
+    }
+  }, [
+    attachRoomDiagnostics,
+    attemptVideoPlay,
+    fetchToken,
+    log,
+    logError,
+    registerSdkEvents,
+    scheduleHotSwap,
+    setStatus,
+  ]);
+
+  useEffect(() => {
+    prewarmSwapRef.current = prewarmAndSwap;
+  }, [prewarmAndSwap]);
 
   const startSession = useCallback(async () => {
     if (sessionRef.current) {
@@ -1055,6 +1253,11 @@ function Index() {
           logError("fala inicial falhou", e);
         }
       }
+
+      // Arma o hot-swap: pré-aquece e troca a sessão antes do limite do plano.
+      sessionStartedAtRef.current = Date.now();
+      swapInProgressRef.current = false;
+      scheduleHotSwap();
     } catch (error) {
       const formatted = logError("erro ao iniciar sessão LiveAvatar", error);
       setStatus("session", "err", formatted);
@@ -1070,10 +1273,15 @@ function Index() {
     } finally {
       setStarting(false);
     }
-  }, [attachRoomDiagnostics, fetchToken, log, logError, registerSdkEvents, setStatus]);
+  }, [attachRoomDiagnostics, fetchToken, log, logError, registerSdkEvents, scheduleHotSwap, setStatus]);
 
   const stopSession = useCallback(async () => {
     log("Encerrando sessão manualmente...");
+    if (hotSwapTimerRef.current !== null) {
+      window.clearTimeout(hotSwapTimerRef.current);
+      hotSwapTimerRef.current = null;
+    }
+    swapInProgressRef.current = false;
     try {
       await sessionRef.current?.stop();
       log("session.stop(): ok", "ok");
@@ -1136,9 +1344,11 @@ function Index() {
           };
           session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onEnd);
         });
+        currentUtteranceRef.current = { text: clean, startedAt: Date.now() };
         const eventId = session.repeat(clean);
         log(`speak_text enviado via repeat(): event_id=${eventId}`, "ok");
         await ended;
+        currentUtteranceRef.current = null;
         log(`speak_text finalizado: event_id=${eventId}`, "ok");
       } catch (error) {
         logError("speak_text/repeat falhou", error);
@@ -2716,6 +2926,23 @@ function Index() {
                             />
                           </label>
                           <label className="block text-sm">
+                            <span className="mb-1 block text-xs font-medium">
+                              Fala ao reconectar (hot-swap)
+                            </span>
+                            <textarea
+                              value={c.reconnectGreeting}
+                              onChange={(e) => upd({ reconnectGreeting: e.target.value })}
+                              rows={2}
+                              placeholder="Deixe vazio para não falar nada ao reconectar"
+                              className="w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm"
+                            />
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              Dita quando a sessão é renovada automaticamente (a cada ciclo do
+                              hot-swap). Diferente da fala inicial. Vazio = continua a conversa
+                              sem falar nada.
+                            </span>
+                          </label>
+                          <label className="block text-sm">
                             <span className="mb-1 block text-xs font-medium">Comportamento</span>
                             <select
                               value={c.behavior}
@@ -2766,6 +2993,36 @@ function Index() {
                     );
                   })}
                 </Accordion>
+
+                <div className="space-y-3 rounded-md border border-border bg-background/40 p-3">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">
+                    🔄 Reconexão automática (hot-swap)
+                  </div>
+                  <label className="block text-sm">
+                    <span className="mb-1 block font-medium">
+                      Reconectar a cada (segundos)
+                    </span>
+                    <input
+                      type="number"
+                      min={HOT_SWAP_MIN_SEC}
+                      step={5}
+                      value={settingsDraft.hotSwapAfterSec}
+                      onChange={(e) =>
+                        setSettingsDraft((d) => ({
+                          ...d,
+                          hotSwapAfterSec: Number(e.target.value) || HOT_SWAP_AFTER_SEC_DEFAULT,
+                        }))
+                      }
+                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      De quanto em quanto tempo a sessão do HeyGen é renovada (pra driblar o
+                      limite por sessão do plano — Starter = 5&nbsp;min). Use <strong>270</strong>{" "}
+                      (4:30) em produção, com folga antes dos 5&nbsp;min. Mínimo {HOT_SWAP_MIN_SEC}s
+                      (tempo de pré-aquecer a nova sessão). Vale ao (re)conectar o avatar.
+                    </span>
+                  </label>
+                </div>
 
                 <div className="space-y-3 rounded-md border border-border bg-background/40 p-3">
                   <div className="text-xs font-semibold uppercase text-muted-foreground">
