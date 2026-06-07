@@ -8,7 +8,7 @@ import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/reca
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Diagnóstico HeyGen LiveAvatar" },
+      { title: "Renante AI" },
       {
         name: "description",
         content: "Diagnóstico visível de LiveAvatar, vídeo, microfone e voz",
@@ -45,6 +45,8 @@ type Settings = {
   meetLink: string;
   recallApiKey: string;
   avatarBaseUrl: string;
+  posterUrl: string; // imagem de preview do avatar (poster no quadro de vídeo antes de conectar)
+  captionsEnabled: boolean; // exibir legendas da transcrição ao vivo na tela
   // Comportamento do avatar DENTRO do Google Meet (Camada 3). No Meet não há
   // botões/atalhos, então tudo é configurado aqui e embutido no bot ao entrar.
   // Há uma config independente POR MODO (Conversa/Reunião/Entrevistador), e você
@@ -75,6 +77,8 @@ const DEFAULT_SETTINGS: Settings = {
   meetLink: "",
   recallApiKey: "",
   avatarBaseUrl: "",
+  posterUrl: "",
+  captionsEnabled: true,
   meetLaunchMode: "reuniao",
   meetConfigs: {
     conversa: {
@@ -254,7 +258,14 @@ function summarizeArg(value: unknown) {
 function StatusDot({ state }: { state: StatusKind }) {
   const color =
     state === "ok" ? "bg-status-ok" : state === "err" ? "bg-destructive" : "bg-status-waiting";
-  return <span className={`mt-1 h-3 w-3 shrink-0 rounded-full ${color}`} />;
+  return (
+    <span className="relative mt-1 flex h-3 w-3 shrink-0">
+      <span
+        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${color}`}
+      />
+      <span className={`relative inline-flex h-3 w-3 rounded-full ${color}`} />
+    </span>
+  );
 }
 
 function Index() {
@@ -292,6 +303,7 @@ function Index() {
   const [settingsDraft, setSettingsDraft] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"avatar" | "webhooks" | "modos" | "meet">("avatar");
   const [mode, setMode] = useState<Mode>("conversa");
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const modeRef = useRef<Mode>("conversa");
@@ -324,6 +336,18 @@ function Index() {
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 1800);
   }, [settingsDraft]);
+
+  // Liga/desliga as legendas da transcrição ao vivo (persiste no localStorage).
+  const toggleCaptions = useCallback(() => {
+    setSettings((s) => {
+      const next = { ...s, captionsEnabled: !s.captionsEnabled };
+      settingsRef.current = next;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+  }, []);
 
   const [liveTranscript, setLiveTranscript] = useState("");
   const [connected, setConnected] = useState(false);
@@ -954,6 +978,25 @@ function Index() {
       setConnected(true);
       setStatus("session", "ok", `Conectada. SDK state=${session.state}`);
       log(`session.start(): ok. sessionId=${session.sessionId} state=${session.state}`, "ok");
+
+      // Fala inicial (ao entrar): fala a saudação configurada PARA O MODO ATUAL.
+      // O HeyGen pode iniciar uma saudação automática própria — então interrompemos
+      // algumas vezes (igual à página /meet) e falamos a SUA frase por cima.
+      const greeting = (s.meetConfigs[modeRef.current]?.greeting ?? "").trim();
+      if (greeting) {
+        for (let i = 0; i < 4; i++) {
+          try {
+            (session as any)?.interrupt?.();
+          } catch {}
+          await new Promise((r) => window.setTimeout(r, 250));
+        }
+        try {
+          log(`fala inicial (substitui a do HeyGen): "${greeting}"`, "ok");
+          session.repeat(greeting);
+        } catch (e) {
+          logError("fala inicial falhou", e);
+        }
+      }
     } catch (error) {
       const formatted = logError("erro ao iniciar sessão LiveAvatar", error);
       setStatus("session", "err", formatted);
@@ -1869,9 +1912,15 @@ function Index() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3">
+        <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h1 className="text-xl font-semibold md:text-2xl">HeyGen LiveAvatar — Renante</h1>
+            <h1 className="flex items-center gap-2 text-xl font-semibold md:text-2xl">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+              </span>
+              Renante AI
+            </h1>
             <div className="flex items-center gap-3">
               <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
               <button
@@ -1912,7 +1961,7 @@ function Index() {
             ))}
           </div>
 
-          <div className="grid gap-2 md:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {(Object.keys(statuses) as StatusKey[]).map((key) => (
               <div
                 key={key}
@@ -1934,7 +1983,7 @@ function Index() {
 
       </div>
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-4 p-4 md:p-8">
+      <main className="mx-auto flex w-full max-w-[1800px] flex-col gap-4 p-3 sm:p-4 md:p-6 lg:p-8">
         {!speechSupported && (
           <div className="rounded-md border border-destructive bg-card p-4 text-lg font-semibold text-destructive">
             Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.
@@ -1950,8 +1999,15 @@ function Index() {
                 playsInline
                 muted={false}
                 controls
+                poster={settings.posterUrl || undefined}
                 className="h-full w-full object-cover"
               />
+              {!connected && !settings.posterUrl && (
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <span className="text-4xl">🎭</span>
+                  <span className="text-sm">Avatar desconectado — clique em "Conectar avatar"</span>
+                </div>
+              )}
               {avatarSpeaking && (
                 <div className="absolute left-2 top-2 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground">
                   falando...
@@ -1985,10 +2041,27 @@ function Index() {
                 {muted ? "🎙️" : listening ? "🔴" : "🎤"}
               </button>
               <div className="rounded-md border border-border bg-card p-4">
-                <div className="text-sm font-medium">Transcrição ao vivo</div>
-                <div className="mt-2 min-h-16 rounded-md border border-border bg-background p-3 text-lg font-semibold">
-                  {liveTranscript || text || "Fale algo para ver a transcrição aqui em tempo real."}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium">Transcrição ao vivo</div>
+                  <button
+                    type="button"
+                    onClick={toggleCaptions}
+                    aria-pressed={settings.captionsEnabled}
+                    title={settings.captionsEnabled ? "Desativar legendas" : "Ativar legendas"}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                      settings.captionsEnabled
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {settings.captionsEnabled ? "💬 Legendas ON" : "💬 Legendas OFF"}
+                  </button>
                 </div>
+                {settings.captionsEnabled && (
+                  <div className="mt-2 min-h-16 rounded-md border border-border bg-background p-3 text-lg font-semibold">
+                    {liveTranscript || text || "Fale algo para ver a transcrição aqui em tempo real."}
+                  </div>
+                )}
                 {mode === "entrevistador" && !muted && interviewerWaiting && (
                   <div className="mt-2 flex items-center gap-2 rounded-md border border-status-ok bg-card px-3 py-2 text-sm font-medium text-status-ok">
                     <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-status-ok" />
@@ -2238,7 +2311,7 @@ function Index() {
             </div>
 
             {/* Live transcript caption */}
-            {(liveTranscript || micLastInterim) && (
+            {settings.captionsEnabled && (liveTranscript || micLastInterim) && (
               <div className="pointer-events-none absolute bottom-28 left-1/2 max-w-3xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white">
                 {liveTranscript || micLastInterim}
               </div>
@@ -2352,9 +2425,9 @@ function Index() {
 
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/80 p-4 backdrop-blur">
-          <div className="my-8 w-full max-w-2xl rounded-lg border border-border bg-card p-6 text-card-foreground shadow-xl">
+          <div className="my-4 flex max-h-[92vh] w-full max-w-3xl flex-col rounded-lg border border-border bg-card p-4 text-card-foreground shadow-xl sm:my-8 sm:p-6">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Configurações</h2>
+              <h2 className="text-lg font-semibold">⚙️ Configurações</h2>
               <button
                 onClick={() => setSettingsOpen(false)}
                 className="rounded-md border border-border px-3 py-1 text-sm hover:bg-muted"
@@ -2363,11 +2436,51 @@ function Index() {
               </button>
             </div>
 
-            <div className="space-y-5">
+            {(() => {
+              const req = (v: string) => (v ?? "").trim() !== "";
+              const avatarOk = (["apiKey", "avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]).every(
+                (k) => req(settingsDraft[k] as string),
+              );
+              const webhooksOk = (["webhookConversa", "webhookReuniao", "webhookEntrevistador", "webhookFiller"] as (keyof Settings)[]).every(
+                (k) => req(settingsDraft[k] as string),
+              );
+              const tabs = [
+                { id: "avatar" as const, label: "🎭 Avatar & Voz", ok: avatarOk },
+                { id: "webhooks" as const, label: "🔗 Webhooks", ok: webhooksOk },
+                { id: "modos" as const, label: "🎙️ Modos", ok: true },
+                { id: "meet" as const, label: "📹 Google Meet", ok: true },
+              ];
+              return (
+                <div className="mb-4 flex flex-wrap gap-2 border-b border-border pb-3">
+                  {tabs.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setSettingsTab(t.id)}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                        settingsTab === t.id
+                          ? "bg-primary text-primary-foreground"
+                          : "border border-border bg-card text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      <span className={`h-2 w-2 rounded-full ${t.ok ? "bg-status-ok" : "bg-destructive"}`} />
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+
+            <div className="flex-1 space-y-5 overflow-y-auto pr-1">
+              {settingsTab === "webhooks" && (
               <fieldset className="space-y-3">
                 <legend className="text-sm font-semibold uppercase text-muted-foreground">
                   Webhooks n8n
                 </legend>
+                <p className="text-xs text-muted-foreground">
+                  Endpoints do n8n para cada modo. Todos são obrigatórios para o app
+                  funcionar corretamente.
+                </p>
                 {(
                   [
                     ["webhookConversa", "Webhook Conversa"],
@@ -2375,53 +2488,102 @@ function Index() {
                     ["webhookEntrevistador", "Webhook Entrevistador"],
                     ["webhookFiller", "Webhook Filler"],
                   ] as [keyof Settings, string][]
-                ).map(([key, label]) => (
+                ).map(([key, label]) => {
+                  const missing = (settingsDraft[key] as string).trim() === "";
+                  return (
                   <label key={key} className="block text-sm">
-                    <span className="mb-1 block font-medium">{label}</span>
+                    <span className="mb-1 flex items-center gap-1 font-medium">
+                      {label} <span className="text-destructive">*</span>
+                    </span>
                     <input
                       value={settingsDraft[key] as string}
                       onChange={(e) =>
                         setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
                       }
-                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                      className={`w-full rounded-md border bg-input px-3 py-2 text-sm ${
+                        missing ? "border-destructive ring-1 ring-destructive" : "border-border"
+                      }`}
                     />
+                    {missing && <span className="mt-1 block text-xs text-destructive">Obrigatório</span>}
                   </label>
-                ))}
+                  );
+                })}
               </fieldset>
+              )}
 
+              {settingsTab === "avatar" && (
               <fieldset className="space-y-3">
                 <legend className="text-sm font-semibold uppercase text-muted-foreground">
-                  Avatar (LiveAvatar)
+                  Avatar & Voz (HeyGen LiveAvatar)
                 </legend>
+                <p className="text-xs text-muted-foreground">
+                  Credenciais e identificadores do avatar. Campos com{" "}
+                  <span className="text-destructive">*</span> são obrigatórios para conectar.
+                </p>
                 {(
                   [
-                    ["apiKey", "API Key"],
-                    ["avatarId", "avatar_id"],
-                    ["voiceId", "voice_id"],
-                    ["contextId", "context_id"],
-                    ["language", "idioma"],
-                  ] as [keyof Settings, string][]
-                ).map(([key, label]) => (
+                    ["apiKey", "Chave da API HeyGen", "api_key"],
+                    ["avatarId", "ID do Avatar", "avatar_id"],
+                    ["voiceId", "ID da Voz", "voice_id"],
+                    ["contextId", "ID do Contexto/Persona", "context_id"],
+                    ["language", "Idioma", "language (ex: pt)"],
+                  ] as [keyof Settings, string, string][]
+                ).map(([key, label, hint]) => {
+                  const missing = (settingsDraft[key] as string).trim() === "";
+                  return (
                   <label key={key} className="block text-sm">
-                    <span className="mb-1 block font-medium">{label}</span>
+                    <span className="mb-1 flex items-center gap-1 font-medium">
+                      {label} <span className="text-destructive">*</span>
+                      <span className="font-mono text-[10px] font-normal text-muted-foreground">({hint})</span>
+                    </span>
                     <input
                       value={settingsDraft[key] as string}
                       onChange={(e) =>
                         setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
                       }
-                      className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                      className={`w-full rounded-md border bg-input px-3 py-2 font-mono text-xs ${
+                        missing ? "border-destructive ring-1 ring-destructive" : "border-border"
+                      }`}
                     />
+                    {missing && <span className="mt-1 block text-xs text-destructive">Obrigatório</span>}
                   </label>
-                ))}
+                  );
+                })}
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">
+                    Imagem de preview do avatar (poster)
+                  </span>
+                  <input
+                    value={settingsDraft.posterUrl}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, posterUrl: e.target.value }))
+                    }
+                    placeholder="https://.../preview.png"
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    URL de uma imagem mostrada no quadro de vídeo antes de conectar o avatar
+                    (opcional). Deixe vazio para mostrar o placeholder padrão.
+                  </span>
+                  {settingsDraft.posterUrl && (
+                    <img
+                      src={settingsDraft.posterUrl}
+                      alt="Preview do avatar"
+                      className="mt-2 h-32 w-auto rounded-md border border-border object-cover"
+                    />
+                  )}
+                </label>
               </fieldset>
+              )}
 
+              {settingsTab === "modos" && (
               <fieldset className="space-y-3">
                 <legend className="text-sm font-semibold uppercase text-muted-foreground">
-                  Modo Entrevistador
+                  Modos & Comportamento
                 </legend>
                 <label className="block text-sm">
                   <span className="mb-1 block font-medium">
-                    Tolerância de silêncio (segundos)
+                    Tolerância de silêncio — Entrevistador (segundos)
                   </span>
                   <input
                     type="number"
@@ -2443,7 +2605,9 @@ function Index() {
                   </span>
                 </label>
               </fieldset>
+              )}
 
+              {settingsTab === "meet" && (
               <fieldset className="space-y-3">
                 <legend className="text-sm font-semibold uppercase text-muted-foreground">
                   Google Meet / Recall (opcional)
@@ -2631,25 +2795,25 @@ function Index() {
                   )}
                 </div>
               </fieldset>
+              )}
+            </div>
 
-
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={saveSettings}
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
-                >
-                  Salvar
-                </button>
-                <button
-                  onClick={() => setSettingsDraft(DEFAULT_SETTINGS)}
-                  className="rounded-md border border-border px-4 py-2 text-sm"
-                >
-                  Restaurar padrões
-                </button>
-                {settingsSaved && (
-                  <span className="text-sm font-medium text-status-ok">Salvo!</span>
-                )}
-              </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+              <button
+                onClick={saveSettings}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+              >
+                Salvar
+              </button>
+              <button
+                onClick={() => setSettingsDraft(DEFAULT_SETTINGS)}
+                className="rounded-md border border-border px-4 py-2 text-sm"
+              >
+                Restaurar padrões
+              </button>
+              {settingsSaved && (
+                <span className="text-sm font-medium text-status-ok">Salvo!</span>
+              )}
             </div>
           </div>
         </div>
