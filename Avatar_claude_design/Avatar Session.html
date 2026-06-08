@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RenAnte Avatar — Sessão ao vivo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c0f;
+  --panel:rgba(17,20,25,.64);
+  --panel-2:rgba(30,34,41,.7);
+  --border:rgba(255,255,255,.12);
+  --border-2:rgba(255,255,255,.18);
+  --ink:#eef1f5; --ink-2:#aeb6c1; --ink-3:#7b838f;
+  --green:#22c55e; --amber:#f5b133; --red:#ea4335; --blue:#3b82f6;
+  --accent:#cf7a1f;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+}
+*{ box-sizing:border-box; }
+html,body{ margin:0; height:100%; overflow:hidden; background:#000; font-family:var(--sans); color:var(--ink); }
+.stage{ position:fixed; inset:0; overflow:hidden; }
+
+/* avatar feed */
+.avatarbg{ position:absolute; inset:0; z-index:0; background:url('assets/avatar-frame.png') center 18%/cover no-repeat; }
+.fallbg{ position:absolute; inset:0; z-index:-1; background:radial-gradient(120% 120% at 50% 30%,#222831,#0a0c0f); }
+.vignette{ position:absolute; inset:0; z-index:1; pointer-events:none;
+  background:linear-gradient(90deg, rgba(0,0,0,.62) 0%, rgba(0,0,0,.18) 28%, transparent 44%, transparent 66%, rgba(0,0,0,.42) 100%),
+             linear-gradient(0deg, rgba(0,0,0,.6) 0%, transparent 16%, transparent 78%, rgba(0,0,0,.5) 100%); }
+
+/* ---- top bar ---- */
+.topbar{ position:absolute; top:0; left:0; right:0; height:54px; z-index:20;
+  display:flex; align-items:center; gap:14px; padding:0 18px; }
+.who{ display:flex; align-items:center; gap:9px; font-weight:600; font-size:15px; }
+.who .mk{ width:26px; height:26px; border-radius:7px; background:linear-gradient(145deg,#2a2f37,#13161b);
+  display:grid; place-items:center; font-size:14px; }
+.who .mode{ color:var(--ink-2); font-weight:500; }
+.rtc{ display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+  background:var(--panel); border:1px solid var(--border); border-radius:7px; padding:4px 10px; backdrop-filter:blur(8px); }
+.dot{ width:8px;height:8px;border-radius:50%; }
+.dot.green{ background:var(--green); box-shadow:0 0 7px var(--green); }
+.dot.amber{ background:var(--amber); box-shadow:0 0 7px var(--amber); }
+.dot.red{ background:var(--red); box-shadow:0 0 7px var(--red); }
+.blink{ animation:blink 1.4s ease-in-out infinite; }
+@keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+.clock{ font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-left:4px; }
+.pills{ margin-left:auto; display:flex; gap:8px; }
+.pills button{ font-family:var(--sans); font-size:13px; font-weight:500; color:var(--ink-2);
+  background:var(--panel); border:1px solid var(--border); border-radius:999px; padding:6px 16px; cursor:pointer; backdrop-filter:blur(8px); }
+.pills button.on{ background:#fff; color:#15171c; border-color:#fff; }
+
+/* ---- left log ---- */
+.leftlog{ position:absolute; left:14px; top:62px; bottom:156px; width:32vw; max-width:470px; min-width:280px; z-index:15;
+  background:var(--panel); border:1px solid var(--border); border-radius:12px; backdrop-filter:blur(10px);
+  display:flex; flex-direction:column; overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+.leftlog .lh{ display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid var(--border); cursor:pointer; }
+.leftlog .lh .car{ color:var(--ink-3); font-size:11px; transition:transform .15s; }
+.leftlog .lh .ttl{ font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); }
+.leftlog .lh .badge{ margin-left:auto; display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; color:var(--ink-3); }
+.leftlog .lf{ flex:1 1 0; min-height:0; overflow:auto; padding:9px 12px; font-family:var(--mono); font-size:11.5px; line-height:1.5; }
+.leftlog.min .lf{ display:none; }
+.leftlog.min{ bottom:auto; }
+.leftlog.min .lh .car{ transform:rotate(-90deg); }
+.lf::-webkit-scrollbar{ width:8px; } .lf::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.18); border-radius:8px; }
+.lline{ padding:2px 0; white-space:pre-wrap; word-break:break-word; border-bottom:1px solid rgba(255,255,255,.05); }
+.lline .ev{ color:var(--ink-3); }
+.lline .ek{ color:#7cc4ff; }
+.lline .txt{ color:#aef0c4; }
+.lline.user .ek{ color:var(--amber); }
+.lline.warn .ek{ color:var(--amber); } .lline.err .ek{ color:#ff8a80; }
+.lline.new{ animation:lin .4s ease-out; }
+@keyframes lin{ from{ background:rgba(207,122,31,.18); } }
+
+/* ---- right status ---- */
+.rightstatus{ position:absolute; right:14px; top:62px; width:264px; z-index:15;
+  background:var(--panel); border:1px solid var(--border); border-radius:12px; backdrop-filter:blur(10px);
+  box-shadow:0 8px 30px rgba(0,0,0,.4); overflow:hidden; }
+.rightstatus .rh{ display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid var(--border); }
+.rightstatus .rh .ttl{ font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); }
+.rightstatus .rh .badge{ margin-left:auto; font-family:var(--mono); font-size:9px; color:var(--green); border:1px solid rgba(34,197,94,.4); background:rgba(34,197,94,.12); border-radius:5px; padding:2px 6px; }
+.rb{ padding:7px 12px 11px; }
+.srow{ display:grid; grid-template-columns:9px 1fr auto; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+.srow:last-child{ border-bottom:0; }
+.srow .led{ width:9px; height:9px; border-radius:50%; }
+.srow .nm{ font-size:12.5px; font-weight:500; }
+.srow .nm small{ display:block; font-family:var(--mono); font-size:9.5px; color:var(--ink-3); margin-top:1px; }
+.srow .vl{ font-family:var(--mono); font-size:10.5px; color:var(--ink-2); text-align:right; }
+.srow .vl.ok{ color:var(--green); } .srow .vl.warn{ color:var(--amber); }
+.rmeta{ display:flex; gap:12px; margin-top:9px; padding-top:9px; border-top:1px solid var(--border); font-family:var(--mono); font-size:10px; color:var(--ink-3); }
+.rmeta b{ color:var(--ink-2); }
+
+/* gzero mark */
+.gz{ position:absolute; right:24px; bottom:170px; z-index:12; font-family:var(--mono); font-weight:600; letter-spacing:.1em;
+  color:rgba(255,255,255,.55); font-size:13px; transform:rotate(-6deg); }
+.gz b{ color:var(--accent); }
+
+/* ---- message (fallback) bar ---- */
+.msgbar{ position:absolute; left:0; right:0; bottom:86px; z-index:20; padding:0 16px; display:flex; gap:10px; }
+.msgbar input{ flex:1; font-family:var(--sans); font-size:13.5px; color:var(--ink);
+  background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:11px 14px; backdrop-filter:blur(10px); outline:none; }
+.msgbar input::placeholder{ color:var(--ink-3); }
+.msgbar input:focus{ border-color:var(--border-2); }
+.msgbar .send{ font-family:var(--sans); font-size:13.5px; font-weight:500; color:var(--ink); cursor:pointer;
+  background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:0 20px; backdrop-filter:blur(10px); }
+.msgbar .send:hover{ background:rgba(59,130,246,.25); border-color:rgba(59,130,246,.5); }
+
+/* ---- meet controls ---- */
+.controls{ position:absolute; left:0; right:0; bottom:18px; z-index:20; display:flex; align-items:center; justify-content:center; gap:14px; }
+.cbtn{ width:50px; height:50px; border-radius:50%; border:1px solid var(--border-2); cursor:pointer; display:grid; place-items:center;
+  background:rgba(40,44,52,.72); color:#fff; backdrop-filter:blur(10px); transition:background .12s, transform .08s; }
+.cbtn:hover{ background:rgba(60,66,76,.85); }
+.cbtn:active{ transform:scale(.94); }
+.cbtn svg{ width:22px; height:22px; fill:none; stroke:#fff; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.cbtn.danger{ background:var(--red); border-color:transparent; }
+.cbtn.danger:hover{ background:#d33b2c; }
+.cbtn.active{ background:var(--blue); border-color:transparent; }
+.cbtn.tip{ position:relative; }
+.cbtn.tip::after{ content:attr(data-tip); position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
+  font-family:var(--sans); font-size:11px; color:var(--ink); background:rgba(10,12,15,.92); border:1px solid var(--border);
+  padding:3px 8px; border-radius:6px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .12s; }
+.cbtn.tip:hover::after{ opacity:1; }
+.leave{ width:auto; border-radius:25px; padding:0 22px; gap:9px; font-family:var(--sans); font-weight:600; font-size:14px; }
+.leave svg{ stroke:#fff; }
+.cdiv{ width:1px; height:30px; background:var(--border); margin:0 4px; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="fallbg"></div>
+    <div class="avatarbg"></div>
+    <div class="vignette"></div>
+
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="who"><span class="mk">🎭</span> Renante <span class="mode">· Reunião</span></div>
+      <span class="rtc"><span class="dot green"></span> WebRTC: <b style="color:var(--green)">connected</b></span>
+      <span class="clock" id="clock">00:00</span>
+      <div class="pills">
+        <button>Conversa</button>
+        <button class="on">Reunião</button>
+        <button>Entrevistador</button>
+      </div>
+    </div>
+
+    <!-- left log -->
+    <div class="leftlog" id="leftlog">
+      <div class="lh" id="logHead">
+        <span class="car">▾</span>
+        <span class="ttl">log</span>
+        <span class="badge"><span class="dot green blink"></span> SDK · ao vivo</span>
+      </div>
+      <div class="lf" id="logFeed"></div>
+    </div>
+
+    <!-- right status -->
+    <div class="rightstatus">
+      <div class="rh"><span class="ttl">status</span><span class="badge">● LIVE</span></div>
+      <div class="rb" id="statusBody"></div>
+    </div>
+
+    <div class="gz">G<b>Z</b>ERO</div>
+
+    <!-- message fallback -->
+    <div class="msgbar">
+      <input id="msgInput" placeholder="Digite uma mensagem (fallback)…" autocomplete="off">
+      <button class="send" id="msgSend">Enviar</button>
+    </div>
+
+    <!-- meet controls -->
+    <div class="controls" id="controls"></div>
+  </div>
+
+  <script>
+  (function(){
+    const $ = s => document.querySelector(s);
+
+    /* ---------- clock ---------- */
+    const t0 = Date.now();
+    setInterval(()=>{ const s=Math.floor((Date.now()-t0)/1000); const m=String(Math.floor(s/60)).padStart(2,'0'); $('#clock').textContent=m+':'+String(s%60).padStart(2,'0'); }, 1000);
+
+    /* ---------- status panel ---------- */
+    const status = [
+      { nm:'Sessão LiveAvatar', sub:'realtime.session', led:'green', vl:'connected', cls:'ok' },
+      { nm:'Vídeo do avatar', sub:'rtc.track.video', led:'green', vl:'live · 30fps', cls:'ok' },
+      { nm:'Microfone', sub:'getUserMedia', led:'red', vl:'mudo', cls:'warn', blink:true },
+      { nm:'Transcrição', sub:'ws · stt', led:'green', vl:'streaming', cls:'ok', blink:true },
+      { nm:'Webhook n8n', sub:'workflow.trigger', led:'amber', vl:'processando…', cls:'warn', blink:true },
+    ];
+    const sb = $('#statusBody');
+    status.forEach((s,i)=>{
+      const r=document.createElement('div'); r.className='srow';
+      r.innerHTML='<span class="led '+ (s.led==='green'?'dot green':s.led==='amber'?'dot amber':'dot red') +(s.blink?' blink':'')+'" style="width:9px;height:9px;border-radius:50%"></span>'
+        +'<span class="nm">'+s.nm+'<small>'+s.sub+'</small></span>'
+        +'<span class="vl '+(s.cls||'')+'">'+s.vl+'</span>';
+      r.querySelector('.led').style.animationDelay = (i*180)+'ms';
+      sb.appendChild(r);
+    });
+    const rm=document.createElement('div'); rm.className='rmeta';
+    rm.innerHTML='lat <b>92ms</b> · bitrate <b>2.4M</b> · hot-swap <b id="hs">4:30</b>';
+    sb.appendChild(rm);
+    // hot-swap countdown
+    let left=270; setInterval(()=>{ left=left<=0?270:left-1; const m=Math.floor(left/60); document.getElementById('hs').textContent=m+':'+String(left%60).padStart(2,'0'); },1000);
+
+    /* ---------- log streaming (avatar.transcription.chunk) ---------- */
+    const feed = $('#logFeed');
+    const SESSION='fb1706dd-0927-492e-82fc-bcf1d83af73c';
+    const uuid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&0x3|0x8)).toString(16);});
+    const fragments = ['Opa! ','Tô ','vendo ','aqui ','o ','pessoal. ','Pode ','mandar ','a ','pergunta ','que ','eu ','respondo. ','Beleza? ','Então… ','sobre ','isso ','eu ','acho '];
+    let fi=0;
+    function ts(){ const d=new Date(); let h=d.getHours(); const ap=h>=12?'PM':'AM'; h=h%12||12; return h+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0')+' '+ap; }
+    function chunkLine(){
+      const text=fragments[fi%fragments.length]; fi++;
+      const ln=document.createElement('div'); ln.className='lline new';
+      ln.innerHTML='<span class="ev">['+ts()+'] [SDK agent event]</span>\n'
+        +'<span class="ek">avatar.transcription.chunk</span>: [ { "event_id": "'+uuid()+'", "event_type": "avatar.transcription.chunk", "source_event_id": null, "session_id": "'+SESSION+'", "text": <span class="txt">"'+text+'"</span> } ]';
+      return ln;
+    }
+    const others = [
+      ()=>{ const l=document.createElement('div'); l.className='lline new'; l.innerHTML='<span class="ev">['+ts()+'] [SDK agent event]</span>\n<span class="ek">avatar.state</span>: { "state": "SPEAKING", "session_id": "'+SESSION+'" }'; return l; },
+      ()=>{ const l=document.createElement('div'); l.className='lline new'; l.innerHTML='<span class="ev">['+ts()+'] [rtc]</span>\n<span class="ek">stats</span>: { "rtt": '+(80+Math.floor(Math.random()*30))+', "fps": 30, "packetsLost": 0 }'; return l; },
+      ()=>{ const l=document.createElement('div'); l.className='lline warn new'; l.innerHTML='<span class="ev">['+ts()+'] [n8n]</span>\n<span class="ek">webhook</span>: POST /webhook/renante-reuniao → 200 ('+(120+Math.floor(Math.random()*80))+'ms)'; return l; },
+    ];
+    function push(node){ feed.appendChild(node); while(feed.children.length>80) feed.removeChild(feed.firstChild); feed.scrollTop=feed.scrollHeight; }
+    // seed
+    for(let i=0;i<6;i++) push(chunkLine());
+    let tick=0;
+    setInterval(()=>{ tick++; if(tick%5===0) push(others[Math.floor(Math.random()*others.length)]()); else push(chunkLine()); }, 850);
+
+    // collapse log
+    $('#logHead').addEventListener('click', ()=> $('#leftlog').classList.toggle('min'));
+
+    // mode pills
+    document.querySelectorAll('.pills button').forEach(b=>b.addEventListener('click',()=>{
+      document.querySelectorAll('.pills button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+      $('.who .mode').textContent='· '+b.textContent;
+    }));
+
+    /* ---------- message send ---------- */
+    function sendMsg(){
+      const v=$('#msgInput').value.trim(); if(!v) return; $('#msgInput').value='';
+      const l=document.createElement('div'); l.className='lline user new';
+      l.innerHTML='<span class="ev">['+ts()+'] [user fallback]</span>\n<span class="ek">chat.message</span>: { "text": <span class="txt">"'+v.replace(/</g,'&lt;')+'"</span> }';
+      push(l);
+    }
+    $('#msgSend').addEventListener('click', sendMsg);
+    $('#msgInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMsg(); });
+
+    /* ---------- meet controls ---------- */
+    const I = {
+      mic:'<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+      micOff:'<svg viewBox="0 0 24 24"><path d="M9 9V6a3 3 0 0 1 6 0v5M5 11a7 7 0 0 0 11 5.5M12 18v3"/><path d="M4 4l16 16"/></svg>',
+      cam:'<svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M15 10l6-3v10l-6-3z"/></svg>',
+      camOff:'<svg viewBox="0 0 24 24"><path d="M3 8a2 2 0 0 1 2-2h7M15 10l6-3v10M15 13v3a2 2 0 0 1-2 2H6"/><path d="M3 3l18 18"/></svg>',
+      present:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 8v5M9.5 10.5L12 8l2.5 2.5"/></svg>',
+      chat:'<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
+      full:'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+      hand:'<svg viewBox="0 0 24 24"><path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V11V4.5a1.5 1.5 0 0 1 3 0V11V6a1.5 1.5 0 0 1 3 0v6a6 6 0 0 1-6 6h-1a5 5 0 0 1-4.3-2.5L6 13.5a1.4 1.4 0 0 1 2-2z"/></svg>',
+      end:'<svg viewBox="0 0 24 24"><path d="M3 11a13 13 0 0 1 18 0l-2.2 2.2a2 2 0 0 1-2.6.2l-1.8-1.3a1.5 1.5 0 0 1-.6-1.2V9.4a11 11 0 0 0-4 0v1.7a1.5 1.5 0 0 1-.6 1.2L7.8 13.4a2 2 0 0 1-2.6-.2L3 11z"/></svg>',
+    };
+    const controls = $('#controls');
+    function cbtn(html, cls, tip){ const b=document.createElement('button'); b.className='cbtn tip '+(cls||''); if(tip) b.dataset.tip=tip; b.innerHTML=html; controls.appendChild(b); return b; }
+    // mic (starts muted/red)
+    let micOn=false; const micB=cbtn(I.micOff,'danger','Ativar microfone');
+    micB.addEventListener('click',()=>{ micOn=!micOn; micB.classList.toggle('danger',!micOn); micB.innerHTML=micOn?I.mic:I.micOff; micB.dataset.tip=micOn?'Silenciar':'Ativar microfone'; });
+    // camera (starts off/red)
+    let camOn=false; const camB=cbtn(I.camOff,'danger','Ativar câmera');
+    camB.addEventListener('click',()=>{ camOn=!camOn; camB.classList.toggle('danger',!camOn); camB.innerHTML=camOn?I.cam:I.camOff; camB.dataset.tip=camOn?'Desligar câmera':'Ativar câmera'; });
+    // present (active blue)
+    const prB=cbtn(I.present,'active','Apresentar');
+    prB.addEventListener('click',()=>prB.classList.toggle('active'));
+    cbtn(I.chat,'','Chat');
+    // fullscreen
+    const fsB=cbtn(I.full,'','Tela cheia');
+    fsB.addEventListener('click',()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen(); else document.exitFullscreen&&document.exitFullscreen(); });
+    cbtn(I.hand,'','Levantar a mão');
+    const dv=document.createElement('div'); dv.className='cdiv'; controls.appendChild(dv);
+    // leave
+    const leave=cbtn(I.end+'<span>Sair</span>','danger leave','Sair da sessão');
+    leave.classList.remove('tip');
+    leave.addEventListener('click',()=>{ window.location.href='Avatar Console.html'; });
+  })();
+  </script>
+</body>
+</html>

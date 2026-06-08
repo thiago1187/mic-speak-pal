@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RenAnte Avatar AI — Console de Diagnóstico</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="dash.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- dev / build strip -->
+    <div class="devbar">
+      <span class="chip"><span class="dot"></span> EM DESENVOLVIMENTO</span>
+      <span class="seg">build <b>v0.4.2-alpha</b></span>
+      <span class="seg">commit <b>7f3ac90</b></span>
+      <span class="seg">branch <b>feat/diagnostico</b></span>
+      <span class="seg">env <b>staging</b></span>
+      <span class="grow"></span>
+      <span class="seg">node <b>v20.11</b></span>
+      <span class="seg">heygen-sdk <b>2.3.1</b></span>
+    </div>
+
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="brand">
+        <span class="mark">🎭</span>
+        <div>
+          <h1>RenAnte <b>Avatar</b> AI</h1>
+          <span class="by">console de diagnóstico · by GZero</span>
+        </div>
+      </div>
+      <span class="statuspill"><span class="led amber blink"></span> WebRTC: aguardando</span>
+      <div class="right">
+        <button class="btn sm">🩺 Diagnóstico</button>
+      </div>
+    </div>
+
+    <!-- bento dashboard -->
+    <div class="bento" id="bento"></div>
+
+  </div>
+
+  <script src="dash-data.js"></script>
+  <script src="dash.js"></script>
+  <script src="reorder.js"></script>
+</body>
+</html>

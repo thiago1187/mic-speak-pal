@@ -335,6 +335,89 @@ function GZeroLogo({
   );
 }
 
+// LED de status (tema dark da tela de sessão). Verde=ok, âmbar=aguardando/parcial,
+// vermelho=erro real, cinza=desligado/sem dados. Nada fictício: a cor vem do estado real.
+type LedTone = "green" | "amber" | "red" | "off";
+function kindToTone(k: StatusKind): LedTone {
+  return k === "ok" ? "green" : k === "err" ? "red" : "amber";
+}
+function rtcToTone(s: string): LedTone {
+  const v = (s || "").toLowerCase();
+  if (v === "connected") return "green";
+  if (v.includes("erro") || v.includes("fail")) return "red";
+  if (v === "conectando" || v.includes("connecting") || v.includes("reconnect")) return "amber";
+  return "off";
+}
+function SessionLed({ tone, blink = false }: { tone: LedTone; blink?: boolean }) {
+  const map: Record<LedTone, string> = {
+    green: "bg-emerald-400 shadow-[0_0_8px_1px_rgba(52,211,153,.7)]",
+    amber: "bg-amber-400 shadow-[0_0_8px_1px_rgba(251,191,36,.6)]",
+    red: "bg-red-400 shadow-[0_0_8px_1px_rgba(248,113,113,.6)]",
+    off: "bg-white/25",
+  };
+  return (
+    <span
+      className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${map[tone]} ${blink ? "animate-pulse" : ""}`}
+    />
+  );
+}
+
+// Wordmark "GZero" estilizado (texto nítido: G rosa + "Zero" branco) — encaixa em
+// qualquer largura e fica baixo, igual à inspiração.
+function GZeroWordmark({ className }: { className?: string }) {
+  return (
+    <span className={`font-extrabold leading-none tracking-tight ${className ?? "text-3xl"}`}>
+      <span className="text-pink-500">G</span>Zero
+    </span>
+  );
+}
+
+// Logo da GZero (imagem real, larga e baixa) em /gzero-logo.png. Se faltar, cai na
+// wordmark de texto pra não quebrar.
+function SidebarLogo({ className }: { className?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <GZeroWordmark className="text-3xl" />;
+  return (
+    <img
+      src="/gzero-logo.png"
+      alt="GZero"
+      onError={() => setFailed(true)}
+      className={`select-none ${className ?? "h-auto w-full object-contain"}`}
+    />
+  );
+}
+
+// Limpa as linhas de log pra tela de sessão: eventos do SDK viram só o nome
+// (sem o JSON gigante); mensagens humanas e erros passam inteiros.
+function prettySessionLine(msg: string): string {
+  const m = msg.match(/^\[SDK(?: agent)? event\]\s+([^:]+):/);
+  if (m) return m[1].trim();
+  return msg;
+}
+
+// Linha de status da sidebar técnica: LED + nome + (valor real à direita).
+function StatusRow({
+  tone,
+  name,
+  value,
+  blink,
+}: {
+  tone: LedTone;
+  name: string;
+  value: string;
+  blink?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2 py-1.5">
+      <SessionLed tone={tone} blink={blink} />
+      <span className="flex-1 text-[12px] text-white/85">{name}</span>
+      <span className="max-w-[55%] truncate font-mono text-[10px] text-white/55" title={value}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 function Index() {
   const fetchToken = useServerFn(getSessionToken);
   const callCreateBot = useServerFn(recallCreateBot);
@@ -346,6 +429,7 @@ function Index() {
   const callEnvStatus = useServerFn(getEnvStatus);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const meetLogEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
   const recognitionRef = useRef<any>(null);
   const isRecognitionRunningRef = useRef(false);
@@ -397,6 +481,13 @@ function Index() {
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [apiListLoading, setApiListLoading] = useState(false);
   const [apiListError, setApiListError] = useState<string | null>(null);
+  // Telemetria real da sessão: relógio da chamada, tick por segundo e status do n8n.
+  const [callStartTs, setCallStartTs] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(0);
+  const [n8nStatus, setN8nStatus] = useState<{ state: "idle" | "waiting" | "ok" | "err"; detail: string }>({
+    state: "idle",
+    detail: "aguardando evento",
+  });
   const [mode, setMode] = useState<Mode>("conversa");
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const modeRef = useRef<Mode>("conversa");
@@ -521,7 +612,7 @@ function Index() {
   const [camOn, setCamOn] = useState(false);
   const [camError, setCamError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [logCollapsed, setLogCollapsed] = useState(true);
+  const [logCollapsed, setLogCollapsed] = useState(false);
   const meetVideoRef = useRef<HTMLVideoElement>(null);
   const camVideoRef = useRef<HTMLVideoElement>(null);
   const camStreamRef = useRef<MediaStream | null>(null);
@@ -723,7 +814,25 @@ function Index() {
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
+    meetLogEndRef.current?.scrollIntoView({ block: "end" });
   }, [logs]);
+
+  // Relógio real da chamada: marca o início na 1ª conexão; zera ao encerrar.
+  useEffect(() => {
+    if (connected) {
+      setCallStartTs((prev) => prev ?? Date.now());
+    } else {
+      setCallStartTs(null);
+    }
+  }, [connected]);
+
+  // Tick de 1s enquanto a sessão está aberta (relógio + contagem do hot-swap).
+  useEffect(() => {
+    if (!meetOpen) return;
+    setNowTs(Date.now());
+    const id = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [meetOpen]);
 
   // Diagnóstico: checa se o SERVIDOR enxerga as variáveis de ambiente (.env / Vercel).
   useEffect(() => {
@@ -1674,6 +1783,7 @@ function Index() {
       const sendTs =
         typeof performance !== "undefined" ? performance.now() : Date.now();
 
+      setN8nStatus({ state: "waiting", detail: "enviando…" });
       const renanteP = fetch(renanteUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1683,6 +1793,7 @@ function Index() {
           const txt = await response.text();
           log(`Webhook Renante (${currentMode}): HTTP ${response.status} ${response.statusText}\n${txt}`);
           if (!response.ok) throw new Error(`Renante HTTP ${response.status}: ${txt}`);
+          setN8nStatus({ state: "ok", detail: `respondeu · HTTP ${response.status}` });
           try {
             return JSON.parse(txt);
           } catch {
@@ -1690,6 +1801,7 @@ function Index() {
           }
         })
         .catch((error) => {
+          setN8nStatus({ state: "err", detail: "falhou" });
           logError("erro Renante", error);
           return { output: "" };
         });
@@ -2834,21 +2946,77 @@ function Index() {
         </section>
       </main>
 
-      {meetOpen && (
-        <div className="fixed inset-0 z-40 flex flex-col bg-black text-white">
-          {/* Top bar */}
-          <div className="flex items-center justify-between px-4 py-2 text-xs text-white/70">
+      {meetOpen && (() => {
+        const modeLabel = MODES.find((m) => m.id === mode)?.label ?? mode;
+        const mmss = (sec: number) =>
+          `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+        const elapsed = callStartTs ? mmss(Math.max(0, (nowTs - callStartTs) / 1000)) : "00:00";
+        const swapTotal = settings.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT;
+        const swapLeft =
+          connected && sessionStartedAtRef.current
+            ? Math.max(0, swapTotal - Math.floor((nowTs - sessionStartedAtRef.current) / 1000))
+            : null;
+        const sttEngineLabel = settings.sttEngine === "deepgram" ? "Deepgram" : "Web Speech";
+        const sttTone: LedTone = muted
+          ? "off"
+          : micLastError
+            ? "red"
+            : listening
+              ? "green"
+              : "amber";
+        const sttValue = muted ? "desligado" : micLastError ? "erro" : listening ? `ouvindo · ${sttEngineLabel}` : "iniciando";
+        const n8nTone: LedTone =
+          n8nStatus.state === "ok"
+            ? "green"
+            : n8nStatus.state === "err"
+              ? "red"
+              : n8nStatus.state === "waiting"
+                ? "amber"
+                : "off";
+        return (
+        <div className="fixed inset-0 z-40 select-none bg-black text-white">
+          {/* Avatar feed em tela cheia (fundo) */}
+          <video
+            ref={meetVideoRef}
+            autoPlay
+            playsInline
+            className="absolute inset-0 h-full w-full bg-black object-contain"
+          />
+          {/* Vignette p/ legibilidade dos painéis glass, sem cobrir o rosto */}
+          <div
+            className="pointer-events-none absolute inset-0 z-[1]"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,0) 22%, rgba(0,0,0,0) 74%, rgba(0,0,0,.6) 100%), linear-gradient(180deg, rgba(0,0,0,.5) 0%, rgba(0,0,0,0) 18%, rgba(0,0,0,0) 78%, rgba(0,0,0,.7) 100%)",
+            }}
+          />
+
+          {/* ===== Top bar ===== */}
+          <div className="absolute inset-x-0 top-0 z-20 flex h-14 items-center justify-between gap-3 px-4">
             <div className="flex items-center gap-3">
-              <span className="font-semibold text-white">Renante · Reunião</span>
-              <span>WebRTC: {webrtcState}</span>
-              {avatarSpeaking && <span className="rounded bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">falando…</span>}
+              <span className="flex items-baseline gap-2 text-sm">
+                <span className="text-lg font-extrabold tracking-tight">
+                  <span className="text-pink-500">G</span>Zero
+                </span>
+                <span className="text-white/40">·</span>
+                <span className="font-semibold">Renante</span>
+                <span className="text-white/40">·</span>
+                <span className="text-white/80">{modeLabel}</span>
+              </span>
+              <span className="flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75 backdrop-blur">
+                <SessionLed tone={rtcToTone(webrtcState)} blink={rtcToTone(webrtcState) === "amber"} />
+                WebRTC: {webrtcState}
+              </span>
+              <span className="rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75 backdrop-blur">
+                ⏱ {elapsed}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               {MODES.map((m) => (
                 <button
                   key={m.id}
                   onClick={() => setMode(m.id)}
-                  className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                     mode === m.id ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
                   }`}
                 >
@@ -2858,128 +3026,174 @@ function Index() {
             </div>
           </div>
 
-          {/* Stage */}
-          <div className="relative flex-1 overflow-hidden">
-            <video
-              ref={meetVideoRef}
-              autoPlay
-              playsInline
-              className="h-full w-full object-contain bg-black"
-            />
-
-            {/* Local camera PiP */}
-            {camOn && (
-              <div className="absolute bottom-4 right-4 h-36 w-52 overflow-hidden rounded-lg border border-white/20 bg-black shadow-xl md:h-44 md:w-64">
-                <video
-                  ref={camVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="h-full w-full object-cover [transform:scaleX(-1)]"
-                />
-                <div className="absolute bottom-1 left-2 text-[10px] text-white/80">Você</div>
-              </div>
-            )}
-
-            {camError && (
-              <div className="absolute left-4 top-4 max-w-sm rounded-md bg-destructive/90 px-3 py-2 text-xs text-destructive-foreground">
-                Câmera indisponível: {camError}
-              </div>
-            )}
-
-            {/* Collapsible log */}
-            <div className="absolute left-4 top-4 max-w-sm">
+          {/* ===== Left: log técnico (glass, recolhível) — preenche até embaixo ===== */}
+          <div
+            className={`absolute left-3 top-16 z-20 flex w-[32vw] min-w-[260px] max-w-[440px] flex-col ${
+              logCollapsed ? "" : "bottom-[150px]"
+            }`}
+          >
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-[rgba(8,10,14,.82)] shadow-[0_8px_30px_rgba(0,0,0,.5)] backdrop-blur-md">
               <button
                 onClick={() => setLogCollapsed((v) => !v)}
-                className="rounded-md bg-white/10 px-2 py-1 text-[11px] text-white/80 hover:bg-white/20"
+                className="flex w-full shrink-0 items-center justify-between px-3 py-2 text-left hover:bg-white/5"
               >
-                {logCollapsed ? "▸ log" : "▾ log"}
+                <span className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-white/70">
+                  {logCollapsed ? "▸" : "▾"} log
+                </span>
+                <span className="flex items-center gap-1.5 rounded-full bg-emerald-400/15 px-2 py-0.5 font-mono text-[9px] text-emerald-300">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> ao vivo
+                </span>
               </button>
               {!logCollapsed && (
-                <div className="mt-2 max-h-64 w-80 overflow-auto rounded-md bg-black/70 p-2 font-mono text-[10px] leading-snug text-white/80">
-                  {logs.slice(-40).map((entry, i) => (
-                    <div key={`${entry.t}-${i}`} className={entry.kind === "err" ? "text-red-300" : ""}>
-                      [{new Date(entry.t).toLocaleTimeString()}] {entry.msg}
-                    </div>
-                  ))}
+                <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/10 px-3 py-2 font-mono text-[10px] leading-relaxed [scrollbar-color:rgba(255,255,255,.18)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-1.5">
+                  {logs.length === 0 ? (
+                    <div className="text-white/40">sem eventos ainda…</div>
+                  ) : (
+                    logs.slice(-200).map((entry, i) => {
+                      const line = prettySessionLine(entry.msg);
+                      return (
+                      <div
+                        key={`${entry.t}-${i}`}
+                        className={`truncate ${
+                          entry.kind === "err"
+                            ? "text-red-300"
+                            : entry.kind === "ok"
+                              ? "text-emerald-300/90"
+                              : "text-white/55"
+                        }`}
+                        title={line}
+                      >
+                        <span className="text-white/30">
+                          {new Date(entry.t).toLocaleTimeString()}
+                        </span>{" "}
+                        {line}
+                      </div>
+                      );
+                    })
+                  )}
+                  <div ref={meetLogEndRef} />
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Live transcript caption */}
-            {settings.captionsEnabled && (liveTranscript || micLastInterim) && (
-              <div className="pointer-events-none absolute bottom-28 left-1/2 max-w-3xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white">
-                {liveTranscript || micLastInterim}
+          {/* ===== Right: sidebar técnica (glass) com logo, selo e LEDs reais ===== */}
+          <aside className="absolute right-3 top-16 z-20 flex w-64 flex-col gap-3">
+            <div className="rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
+              {/* Header: logo GZero real (larga e baixa) preenchendo a largura + ALPHA */}
+              <div className="relative mb-3">
+                <SidebarLogo className="h-auto w-full object-contain" />
+                <span className="absolute -bottom-1 right-0 rounded border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase text-amber-300">
+                  Alpha
+                </span>
               </div>
-            )}
+              <div className="mb-2 flex items-center justify-between border-t border-white/10 pt-2">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-white/55">status</span>
+                <span className="flex items-center gap-1.5 font-mono text-[9px] text-emerald-300">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> live
+                </span>
+              </div>
+              <div className="divide-y divide-white/5">
+                <StatusRow tone={rtcToTone(webrtcState)} name="WebRTC" value={webrtcState} blink={rtcToTone(webrtcState) === "amber"} />
+                <StatusRow tone={kindToTone(statuses.session.state)} name="Sessão LiveAvatar" value={connected ? "conectada" : "—"} />
+                <StatusRow tone={kindToTone(statuses.video.state)} name="Vídeo do avatar" value={avatarSpeaking ? "falando" : statuses.video.state === "ok" ? "recebendo" : "—"} />
+                <StatusRow tone={muted ? "off" : kindToTone(statuses.microphone.state)} name="Microfone" value={micState} />
+                <StatusRow tone={sttTone} name="Transcrição (STT)" value={sttValue} blink={sttTone === "amber"} />
+                <StatusRow tone={n8nTone} name="Webhook n8n" value={n8nStatus.detail} blink={n8nTone === "amber"} />
+                <StatusRow tone="green" name="Fallback (texto)" value="disponível" />
+              </div>
+              {/* Footer meta: hot-swap real; métricas não medidas = não expostas */}
+              <div className="mt-2 grid grid-cols-3 gap-1 border-t border-white/10 pt-2 text-center font-mono text-[9px] text-white/50">
+                <div>
+                  <div className="text-white/30">hot-swap</div>
+                  <div className="text-white/80">{swapLeft !== null ? `${swapLeft}s` : "—"}</div>
+                </div>
+                <div>
+                  <div className="text-white/30">latência</div>
+                  <div className="text-white/50">não exposta</div>
+                </div>
+                <div>
+                  <div className="text-white/30">bitrate</div>
+                  <div className="text-white/50">não exposto</div>
+                </div>
+              </div>
+            </div>
 
-            {/* Propaganda GZero — sapo na lateral direita (área preta da chamada).
-                A imagem já tem fundo preto; mix-blend-lighten faz o preto sumir e
-                deixa só o sapo/logo aparecendo, sem cobrir o avatar. */}
-            <img
-              src="/Gzero-Frog.png"
-              alt="GZero"
-              className="pointer-events-none absolute right-0 top-1/2 z-0 h-40 w-auto max-w-[18%] -translate-y-1/2 select-none object-contain opacity-95 mix-blend-lighten md:h-56"
-            />
-
-            {/* Painel de comandos de voz (apenas Reunião) */}
+            {/* Estado de voz (Reunião) — real (wake/dormindo) */}
             {mode === "reuniao" && (
-              <div className="absolute right-4 top-4 z-10 w-72 rounded-lg border border-white/15 bg-black/60 p-3 text-[11px] text-white/80 backdrop-blur">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-semibold text-white">Comandos de voz</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                      meetingActive
-                        ? "bg-emerald-500/20 text-emerald-300"
-                        : "bg-white/10 text-white/70"
-                    }`}
-                  >
-                    {meetingActive ? "● Ativo (respondendo)" : "○ Dormindo (só ouvindo)"}
+              <div className="rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-white/55">comandos de voz</span>
+                  <span className={`flex items-center gap-1.5 font-mono text-[9px] ${meetingActive ? "text-emerald-300" : "text-white/50"}`}>
+                    <SessionLed tone={meetingActive ? "green" : "off"} /> {meetingActive ? "ativo" : "dormindo"}
                   </span>
                 </div>
-                <div className="space-y-1.5 leading-snug">
-                  <div>
-                    <span className="text-emerald-300">Ativar:</span>{" "}
-                    <span className="text-white/70">"oi Renante", "olá Renan", "ei Dante" ou só o nome</span>
-                  </div>
-                  <div>
-                    <span className="text-white/60">Desativar:</span>{" "}
-                    <span className="text-white/70">"desligar Renante", "tchau Renan", "valeu Dante" ou "pode parar"</span>
-                  </div>
+                <div className="space-y-1 text-[10px] leading-snug text-white/60">
+                  <div><span className="text-emerald-300/90">Ativar:</span> "oi Renante" / só o nome</div>
+                  <div><span className="text-white/50">Desativar:</span> "tchau Renante" / "pode parar"</div>
                 </div>
               </div>
             )}
+          </aside>
+
+          {/* Local camera PiP */}
+          {camOn && (
+            <div className="absolute bottom-[150px] right-3 z-20 h-28 w-44 overflow-hidden rounded-lg border border-white/20 bg-black shadow-xl md:h-32 md:w-52">
+              <video
+                ref={camVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="h-full w-full object-cover [transform:scaleX(-1)]"
+              />
+              <div className="absolute bottom-1 left-2 font-mono text-[10px] text-white/80">Você</div>
+            </div>
+          )}
+
+          {camError && (
+            <div className="absolute left-3 bottom-[150px] z-20 max-w-xs rounded-md border border-red-400/40 bg-red-500/15 px-3 py-2 text-xs text-red-200 backdrop-blur">
+              Câmera indisponível: {camError}
+            </div>
+          )}
+
+          {/* Legenda ao vivo */}
+          {settings.captionsEnabled && (liveTranscript || micLastInterim) && (
+            <div className="pointer-events-none absolute bottom-[150px] left-1/2 z-10 max-w-2xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white backdrop-blur">
+              {liveTranscript || micLastInterim}
+            </div>
+          )}
+
+          {/* ===== Barra de fallback por texto ===== */}
+          <div className="absolute inset-x-0 bottom-[84px] z-20 px-4">
+            <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] px-3 py-2 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
+              <input
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setLiveTranscript(e.target.value);
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
+                placeholder="Digite uma mensagem (fallback)…"
+                className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm text-white placeholder:text-white/40 focus:outline-none"
+              />
+              <button
+                onClick={() => void handleSend()}
+                disabled={!connected || !text.trim()}
+                className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-black disabled:opacity-40"
+              >
+                Enviar
+              </button>
+            </div>
           </div>
 
-          {/* Text fallback */}
-          <div className="flex items-center gap-2 border-t border-white/10 bg-black/60 px-4 py-2">
-            <input
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                setLiveTranscript(e.target.value);
-              }}
-              onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-              placeholder="Digite uma mensagem (fallback)…"
-              className="min-w-0 flex-1 rounded-md border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/40"
-            />
-            <button
-              onClick={() => void handleSend()}
-              disabled={!connected || !text.trim()}
-              className="rounded-md bg-white px-3 py-2 text-sm font-medium text-black disabled:opacity-40"
-            >
-              Enviar
-            </button>
-          </div>
-
-          {/* Control bar */}
-          <div className="flex items-center justify-center gap-3 border-t border-white/10 bg-black/80 px-4 py-4">
+          {/* ===== Control bar ===== */}
+          <div className="absolute inset-x-0 bottom-4 z-20 flex items-center justify-center gap-2.5 px-4">
             <button
               onClick={toggleMute}
               disabled={!speechSupported && settings.sttEngine !== "deepgram"}
               title={muted ? "Ativar microfone" : "Mutar microfone"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
-                muted ? "bg-destructive text-destructive-foreground" : "bg-white/15 text-white hover:bg-white/25"
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+                muted ? "bg-destructive text-destructive-foreground" : "bg-white/12 text-white hover:bg-white/25"
               } disabled:opacity-40`}
             >
               {muted ? "🎙️" : "🎤"}
@@ -2987,8 +3201,8 @@ function Index() {
             <button
               onClick={toggleCamera}
               title={camOn ? "Desligar câmera" : "Ligar câmera"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
-                camOn ? "bg-white/15 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+                camOn ? "bg-white/12 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
               }`}
             >
               {camOn ? "📹" : "📷"}
@@ -2997,17 +3211,15 @@ function Index() {
               onClick={interruptAvatar}
               disabled={!connected}
               title="Interromper fala (espaço)"
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25 disabled:opacity-40"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25 disabled:opacity-40"
             >
               ⏹
             </button>
             <button
               onClick={toggleCaptions}
               title={settings.captionsEnabled ? "Desativar legendas" : "Ativar legendas"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
-                settings.captionsEnabled
-                  ? "bg-white/15 text-white hover:bg-white/25"
-                  : "bg-destructive text-destructive-foreground"
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+                settings.captionsEnabled ? "bg-white/12 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
               }`}
             >
               💬
@@ -3015,27 +3227,28 @@ function Index() {
             <button
               onClick={toggleFullscreen}
               title={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25"
             >
               {isFullscreen ? "🗗" : "⛶"}
             </button>
             <button
               onClick={() => setMeetOpen(false)}
               title="Minimizar"
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-xl text-white hover:bg-white/25"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25"
             >
               ⤓
             </button>
             <button
               onClick={() => { void stopSession(); }}
-              title="Sair da reunião"
-              className="ml-2 flex h-12 items-center justify-center gap-2 rounded-full bg-destructive px-5 text-sm font-semibold text-destructive-foreground hover:opacity-90"
+              title="Encerrar sessão"
+              className="ml-1 flex h-12 items-center justify-center gap-2 rounded-full bg-destructive px-5 text-sm font-semibold text-destructive-foreground hover:opacity-90"
             >
               ☎ Sair
             </button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
 
 
