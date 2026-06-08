@@ -49,6 +49,9 @@ const HOT_SWAP_MIN_SEC = 20; // tempo mínimo p/ dar conta de pré-aquecer a nov
 // Quanto tempo, no máximo, esperar o avatar terminar a frase antes de forçar a troca.
 // Em produção (gatilho 4:30) isso ainda cabe antes do cap de 5 min (4:30 + 20s = 4:50).
 const HOT_SWAP_MAX_DEFER_MS = 20_000;
+// Rate limit dos envios ao n8n: no máx 1 handleSend/seg (= no máx ~2 chamadas/seg,
+// filler + agente). Bloqueia duplicatas/eco do reconhecimento de voz.
+const SEND_MIN_GAP_MS = 1000;
 
 type Mode = "conversa" | "reuniao" | "entrevistador";
 const MODES: { id: Mode; label: string }[] = [
@@ -450,6 +453,8 @@ function Index() {
   const meetingActiveRef = useRef(false);
   // Filler: histórico das últimas 3 respostas não-vazias da sessão (FIFO, em memória).
   const fillerHistoryRef = useRef<string[]>([]);
+  // Rate limit: hora do último handleSend, pra limitar envios ao n8n (≤ ~2 chamadas/seg).
+  const lastSendRef = useRef<{ text: string; timestamp: number }>({ text: "", timestamp: 0 });
   // Hot-swap: reinício automático da sessão HeyGen preservando contexto (que vive no n8n).
   const sessionStartedAtRef = useRef(0);
   const swapInProgressRef = useRef(false);
@@ -1765,6 +1770,19 @@ function Index() {
         log("handleSend ignorado: texto vazio");
         return;
       }
+
+      // Rate limit: no máximo 1 handleSend por segundo (1 handleSend = filler + agente,
+      // ou seja, no máx ~2 chamadas/seg ao n8n). Barra duplicatas/eco do STT sem
+      // comparar o texto — qualquer 2º envio dentro de 1s é ignorado.
+      const nowMs = Date.now();
+      const sinceLast = nowMs - lastSendRef.current.timestamp;
+      if (sinceLast < SEND_MIN_GAP_MS) {
+        console.warn("[THROTTLED]", `${sinceLast}ms`, question);
+        log(`[THROTTLED] envio ignorado (${sinceLast}ms desde o último): "${question}"`);
+        return;
+      }
+      lastSendRef.current = { text: question, timestamp: nowMs };
+
       if (!sessionRef.current || !connected) {
         log("sessão ainda não conectada. Clique em Conectar.", "err");
         return;

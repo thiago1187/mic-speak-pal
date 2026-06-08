@@ -84,6 +84,8 @@ function MeetAvatar() {
   const meetingActiveRef = useRef(false); // false = só ouvindo; true = respondendo
   const wsRef = useRef<WebSocket | null>(null);
   const lastSegRef = useRef(""); // dedupe de transcrições repetidas
+  // Idempotência: bloqueia handleSend duplicado pro mesmo texto numa janela curta.
+  const lastSendRef = useRef<{ text: string; timestamp: number }>({ text: "", timestamp: 0 });
   const cfgRef = useRef<Cfg>(readConfig());
   // Buffer + timer de silêncio: acumula os trechos e só envia quando a pessoa para.
   const meetBufferRef = useRef("");
@@ -171,6 +173,19 @@ function MeetAvatar() {
   // ---- envio pro n8n com FILLER INSTANTÂNEO (webhook = o do modo escolhido) ----
   const handleSend = useCallback(
     async (question: string, responder: boolean) => {
+      // Rate limit: no máx 1 handleSend por segundo (= no máx ~2 chamadas/seg ao n8n,
+      // filler + agente). Barra duplicatas/eco do STT sem comparar texto.
+      const trimmed = (question || "").trim();
+      if (!trimmed) return;
+      const nowMs = Date.now();
+      const sinceLast = nowMs - lastSendRef.current.timestamp;
+      if (sinceLast < 1000) {
+        console.warn("[THROTTLED]", `${sinceLast}ms`, trimmed);
+        log(`[THROTTLED] envio ignorado (${sinceLast}ms desde o último): "${trimmed}"`);
+        return;
+      }
+      lastSendRef.current = { text: trimmed, timestamp: nowMs };
+
       const s = cfgRef.current;
       // sessionId ÚNICO desta sessão de /meet (não o modo), pra não colidir com o
       // app principal e pra a tool conseguir ligar filler ↔ agente. `responder` só
