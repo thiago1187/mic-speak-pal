@@ -7,6 +7,12 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
+  // Desliga o overlay vermelho de erro do Vite no dev — quando um erro (ex.: token
+  // recusado) acontecia, ele cobria a tela toda e travava o site. Os erros continuam
+  // no console e no LOG do app, tratados de forma amigável; só não cobrem mais a UI.
+  vite: {
+    server: { hmr: { overlay: false } },
+  },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this

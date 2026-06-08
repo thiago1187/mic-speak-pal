@@ -1146,12 +1146,27 @@ function Index() {
         ws.binaryType = "arraybuffer";
         dgWsRef.current = ws;
 
+        // Buffer do áudio capturado ANTES do WS abrir (~1s de conexão), pra não
+        // "comer" as primeiras palavras. Despeja tudo assim que conectar.
+        const preOpenChunks: ArrayBuffer[] = [];
+        const MAX_PREOPEN = 120; // ~10s de áudio (4096 amostras/quadro @ ~48kHz)
+
         ws.onopen = () => {
           setListening(true);
           setMicState("ouvindo");
           setMicLastError("");
           setStatus("microphone", "ok", `Deepgram conectado; ouvindo… (${reason})`);
           log(`Deepgram WS aberto; ouvindo (modo=${mode})`, "ok");
+          // Manda o áudio bufferizado antes do open (preserva as primeiras palavras).
+          if (preOpenChunks.length) {
+            log(`Deepgram: enviando ${preOpenChunks.length} quadros capturados antes da conexão`);
+            for (const buf of preOpenChunks) {
+              try {
+                ws.send(buf);
+              } catch {}
+            }
+            preOpenChunks.length = 0;
+          }
           dgKeepAliveRef.current = window.setInterval(() => {
             try {
               if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "KeepAlive" }));
@@ -3079,9 +3094,9 @@ function Index() {
 
           {/* ===== Right: sidebar técnica (glass) com logo, selo e LEDs reais ===== */}
           <aside className="absolute right-3 top-16 z-20 flex w-64 flex-col gap-3">
-            <div className="rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
-              {/* Header: logo GZero real (larga e baixa) preenchendo a largura + ALPHA */}
-              <div className="relative mb-3">
+            <div className="rounded-xl border border-white/12 bg-[rgba(10,12,16,.9)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.5)] backdrop-blur-md">
+              {/* Header: logo GZero real preenchendo a largura (tamanho = proporção do PNG) + ALPHA */}
+              <div className="relative mb-3 rounded-lg bg-black/50 p-2">
                 <SidebarLogo className="h-auto w-full object-contain" />
                 <span className="absolute -bottom-1 right-0 rounded border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase text-amber-300">
                   Alpha
