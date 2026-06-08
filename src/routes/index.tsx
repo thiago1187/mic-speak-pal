@@ -37,7 +37,7 @@ const SETTINGS_KEY = "liveavatar.settings.v1";
 const MODE_KEY = "liveavatar.mode.v1";
 // Entrevistador: pausa de silêncio (s) antes de considerar que a pessoa terminou.
 // Fallback caso a config não esteja salva. Ajustável na UI (entrevistadorSilenceSec).
-const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 3;
+const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 1;
 // Hot-swap: tempo após (re)conectar para pré-aquecer uma NOVA sessão e trocar,
 // driblando o limite de duração por sessão do plano (Starter = 5 min, até 5 sessões
 // simultâneas). O "cérebro" (n8n) é independente da sessão HeyGen, então o contexto
@@ -1070,20 +1070,15 @@ function Index() {
   // ===== Motor Deepgram (alternativa universal ao Web Speech) =====
   // Captura o microfone, converte para PCM16 e envia por WebSocket ao Deepgram,
   // que devolve trechos parciais/finais — roteados pelos mesmos handlers.
-  const stopDeepgram = useCallback(() => {
+  // graceful=true: para de captar áudio mas mantém o WebSocket aberto por um instante
+  // após o CloseStream, pra o Deepgram ainda devolver a transcrição FINAL da última
+  // fala (senão, ao mutar logo depois de falar, a frase se perde e não vai pro n8n).
+  const stopDeepgram = useCallback((opts?: { graceful?: boolean }) => {
     if (dgKeepAliveRef.current !== null) {
       window.clearInterval(dgKeepAliveRef.current);
       dgKeepAliveRef.current = null;
     }
-    try {
-      if (dgWsRef.current?.readyState === WebSocket.OPEN) {
-        dgWsRef.current.send(JSON.stringify({ type: "CloseStream" }));
-      }
-    } catch {}
-    try {
-      dgWsRef.current?.close();
-    } catch {}
-    dgWsRef.current = null;
+    // Para de captar/enviar áudio novo imediatamente.
     try {
       dgProcRef.current?.disconnect();
     } catch {}
@@ -1100,6 +1095,30 @@ function Index() {
     dgSourceRef.current = null;
     dgStreamRef.current = null;
     dgCtxRef.current = null;
+
+    const ws = dgWsRef.current;
+    dgWsRef.current = null; // o onaudioprocess/reconnect já não usam mais este ws
+    if (!ws) return;
+    if (opts?.graceful && ws.readyState === WebSocket.OPEN) {
+      // Avisa o Deepgram pra finalizar; mantém o ws ouvindo as últimas mensagens
+      // (onmessage segue roteando o FINAL → handleSend) e fecha logo depois.
+      try {
+        ws.send(JSON.stringify({ type: "CloseStream" }));
+      } catch {}
+      window.setTimeout(() => {
+        try {
+          ws.close();
+        } catch {}
+      }, 600); // janela curta pra receber a transcrição final após o CloseStream
+      return;
+    }
+    // Fechamento imediato (limpeza ao (re)iniciar / encerrar sessão).
+    try {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "CloseStream" }));
+    } catch {}
+    try {
+      ws.close();
+    } catch {}
   }, []);
 
   const startDeepgram = useCallback(
@@ -1294,7 +1313,9 @@ function Index() {
     } catch (error) {
       logError("recognition.stop() falhou ao mutar", error);
     }
-    stopDeepgram(); // encerra o Deepgram se estiver ativo
+    // Fecha com elegância: espera o Deepgram devolver a transcrição final da última
+    // fala antes de encerrar (senão, ao mutar logo após falar, a frase não vai pro n8n).
+    stopDeepgram({ graceful: true });
     setMicState("desligado");
     setStatus(
       "microphone",
