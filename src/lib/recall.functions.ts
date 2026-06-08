@@ -2,6 +2,17 @@ import { createServerFn } from "@tanstack/react-start";
 
 const RECALL_BASE = "https://us-west-2.recall.ai/api/v1";
 
+// A apiKey pode vir vazia do cliente: usamos a env RECALL_API_KEY (.env / Vercel).
+function resolveRecallKey(clientKey?: string): string {
+  const key = (clientKey || process.env.RECALL_API_KEY || "").trim();
+  if (!key) {
+    throw new Error(
+      "Recall API key ausente. Defina RECALL_API_KEY no .env (local) e nas Environment Variables da Vercel.",
+    );
+  }
+  return key;
+}
+
 // outputMediaUrl (CAMADA 3): quando presente, o Recall renderiza essa página
 // pública num navegador na nuvem dele e transmite o áudio+vídeo dela como
 // câmera+microfone do bot dentro da reunião (o avatar fala DENTRO do Meet).
@@ -15,11 +26,11 @@ type CreateBotInput = {
 
 export const recallCreateBot = createServerFn({ method: "POST" })
   .inputValidator((data: CreateBotInput) => {
-    if (!data?.apiKey) throw new Error("apiKey ausente");
     if (!data?.meetingUrl) throw new Error("meetingUrl ausente");
     return data;
   })
   .handler(async ({ data }) => {
+    const apiKey = resolveRecallKey(data.apiKey);
     const body: Record<string, unknown> = {
       meeting_url: data.meetingUrl,
       bot_name: data.botName || "Renante",
@@ -59,7 +70,7 @@ export const recallCreateBot = createServerFn({ method: "POST" })
     const res = await fetch(`${RECALL_BASE}/bot/`, {
       method: "POST",
       headers: {
-        Authorization: `Token ${data.apiKey}`,
+        Authorization: `Token ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -76,16 +87,16 @@ type BotIdInput = { apiKey: string; botId: string };
 
 export const recallGetTranscript = createServerFn({ method: "POST" })
   .inputValidator((data: BotIdInput) => {
-    if (!data?.apiKey) throw new Error("apiKey ausente");
     if (!data?.botId) throw new Error("botId ausente");
     return data;
   })
   .handler(async ({ data }) => {
+    const apiKey = resolveRecallKey(data.apiKey);
     const res = await fetch(
       `${RECALL_BASE}/bot/${encodeURIComponent(data.botId)}/transcript/`,
       {
         method: "GET",
-        headers: { Authorization: `Token ${data.apiKey}` },
+        headers: { Authorization: `Token ${apiKey}` },
       },
     );
     const text = await res.text();
@@ -98,16 +109,16 @@ export const recallGetTranscript = createServerFn({ method: "POST" })
 
 export const recallLeaveBot = createServerFn({ method: "POST" })
   .inputValidator((data: BotIdInput) => {
-    if (!data?.apiKey) throw new Error("apiKey ausente");
     if (!data?.botId) throw new Error("botId ausente");
     return data;
   })
   .handler(async ({ data }) => {
+    const apiKey = resolveRecallKey(data.apiKey);
     const res = await fetch(
       `${RECALL_BASE}/bot/${encodeURIComponent(data.botId)}/leave_call/`,
       {
         method: "POST",
-        headers: { Authorization: `Token ${data.apiKey}` },
+        headers: { Authorization: `Token ${apiKey}` },
       },
     );
     const text = await res.text();

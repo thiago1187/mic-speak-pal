@@ -2,7 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
-import { getSessionToken } from "@/lib/heygen.functions";
+import {
+  getSessionToken,
+  getDeepgramToken,
+  listAvatars,
+  listVoices,
+  type AvatarOption,
+  type VoiceOption,
+} from "@/lib/heygen.functions";
 import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/recall.functions";
 import {
   Accordion,
@@ -74,6 +81,8 @@ type Settings = {
   meetSilenceSec: number; // pausa de silêncio (s) no Meet antes de mandar a fala pro n8n
   entrevistadorSilenceSec: number; // pausa de silêncio (s) antes de fechar a fala no Entrevistador
   hotSwapAfterSec: number; // intervalo (s) entre reconexões automáticas (hot-swap)
+  sttEngine: "webspeech" | "deepgram"; // motor de transcrição da fala do usuário
+  deepgramApiKey: string; // API key do Deepgram (usada só p/ gerar token temporário no servidor)
 };
 
 type MeetModeConfig = {
@@ -88,7 +97,7 @@ const DEFAULT_SETTINGS: Settings = {
   webhookReuniao: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-reuniao",
   webhookEntrevistador: "https://n8n.srv1435894.hstgr.cloud/webhook/renante-entrevistador",
   webhookFiller: "https://n8n.srv1435894.hstgr.cloud/webhook/filler",
-  apiKey: "33003367-5918-11f1-8d28-066a7fa2e369",
+  apiKey: "", // vem do servidor (HEYGEN_API_KEY no .env / Vercel); vazio aqui = usa a env
   avatarId: "f79bd86d-ec79-4ff6-85e9-2eee714eaa0e",
   voiceId: "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098",
   contextId: "620eb98d-45ae-4a6c-9971-2c0915b4c279",
@@ -123,6 +132,8 @@ const DEFAULT_SETTINGS: Settings = {
   meetSilenceSec: 0.5,
   entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
   hotSwapAfterSec: HOT_SWAP_AFTER_SEC_DEFAULT,
+  sttEngine: "webspeech",
+  deepgramApiKey: "",
 };
 
 function loadSettings(): Settings {
@@ -328,6 +339,9 @@ function Index() {
   const callCreateBot = useServerFn(recallCreateBot);
   const callGetTranscript = useServerFn(recallGetTranscript);
   const callLeaveBot = useServerFn(recallLeaveBot);
+  const callListAvatars = useServerFn(listAvatars);
+  const callListVoices = useServerFn(listVoices);
+  const callDeepgramToken = useServerFn(getDeepgramToken);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -358,6 +372,14 @@ function Index() {
   // Última fala de CONTEÚDO em andamento (texto + início), p/ retomar se um hot-swap
   // forçado cortar no meio. Reconexão/saudações curtas não entram aqui.
   const currentUtteranceRef = useRef<{ text: string; startedAt: number } | null>(null);
+  // Motor Deepgram (alternativa ao Web Speech): captura mic -> PCM -> WebSocket.
+  const dgWsRef = useRef<WebSocket | null>(null);
+  const dgCtxRef = useRef<AudioContext | null>(null);
+  const dgProcRef = useRef<ScriptProcessorNode | null>(null);
+  const dgSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const dgStreamRef = useRef<MediaStream | null>(null);
+  const dgKeepAliveRef = useRef<number | null>(null);
+  const dgStartRef = useRef<(mode: RecognitionMode, reason: string) => void>(() => {});
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [statuses, setStatuses] = useState<Record<StatusKey, StatusItem>>(initialStatuses);
@@ -368,6 +390,11 @@ function Index() {
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<"avatar" | "webhooks" | "modos" | "meet">("avatar");
+  // Listas puxadas da API HeyGen (avatares/vozes) pra preencher os selects.
+  const [avatarOptions, setAvatarOptions] = useState<AvatarOption[]>([]);
+  const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
+  const [apiListLoading, setApiListLoading] = useState(false);
+  const [apiListError, setApiListError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("conversa");
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const modeRef = useRef<Mode>("conversa");
@@ -410,6 +437,43 @@ function Index() {
     );
     setTimeout(() => setSettingsSaved(false), 1800);
   }, [settingsDraft]);
+
+  // Puxa avatares (da conta + públicos) e vozes da API HeyGen pra preencher os selects.
+  const loadAvatarVoiceLists = useCallback(async () => {
+    const key = settingsDraft.apiKey.trim();
+    if (!key) {
+      setApiListError("Preencha a API Key primeiro (campo abaixo).");
+      return;
+    }
+    setApiListLoading(true);
+    setApiListError(null);
+    try {
+      const [av, vo] = await Promise.all([
+        callListAvatars({ data: { apiKey: key } }),
+        callListVoices({ data: { apiKey: key } }),
+      ]);
+      setAvatarOptions(av);
+      setVoiceOptions(vo);
+      if (!av.length && !vo.length) setApiListError("A API não retornou avatares/vozes.");
+    } catch (e: any) {
+      setApiListError(e?.message ?? String(e));
+    } finally {
+      setApiListLoading(false);
+    }
+  }, [callListAvatars, callListVoices, settingsDraft.apiKey]);
+
+  // Define o motor de transcrição (Web Speech ou Deepgram) e persiste.
+  const setSttEngine = useCallback((engine: "webspeech" | "deepgram") => {
+    setSettings((s) => {
+      const next = { ...s, sttEngine: engine };
+      settingsRef.current = next;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+    setSettingsDraft((d) => ({ ...d, sttEngine: engine }));
+  }, []);
 
   // Liga/desliga as legendas da transcrição ao vivo (persiste no localStorage).
   const toggleCaptions = useCallback(() => {
@@ -605,6 +669,8 @@ function Index() {
 
   const maybeStartListening = useCallback(
     (reason = "restart automático") => {
+      // No modo Deepgram o Web Speech fica desligado (o WS é contínuo).
+      if (settingsRef.current.sttEngine === "deepgram") return;
       if (
         shouldListenRef.current &&
         !isMutedRef.current &&
@@ -657,6 +723,85 @@ function Index() {
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [logs]);
 
+  // ===== Roteamento de transcrição (compartilhado entre Web Speech e Deepgram) =====
+  // Entrevistador: acumula e só envia após silêncio longo.
+  const flushInterviewer = useCallback(() => {
+    if (interviewerSilenceTimerRef.current !== null) {
+      window.clearTimeout(interviewerSilenceTimerRef.current);
+      interviewerSilenceTimerRef.current = null;
+    }
+    const buffered = interviewerBufferRef.current.trim();
+    interviewerBufferRef.current = "";
+    setInterviewerWaiting(false);
+    if (buffered) {
+      log(`Entrevistador: pausa longa — enviando resposta completa: "${buffered}"`, "ok");
+      void handleVoiceUtteranceRef.current?.(buffered);
+    }
+  }, [log]);
+
+  const scheduleInterviewerFlush = useCallback(() => {
+    setInterviewerWaiting(true);
+    if (interviewerSilenceTimerRef.current !== null) {
+      window.clearTimeout(interviewerSilenceTimerRef.current);
+    }
+    const sec = settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
+    interviewerSilenceTimerRef.current = window.setTimeout(flushInterviewer, Math.max(0.5, sec) * 1000);
+  }, [flushInterviewer]);
+
+  // Trecho parcial (interim): atualiza a transcrição ao vivo.
+  const routeInterim = useCallback(
+    (partial: string) => {
+      if (!partial) return;
+      if (isAvatarSpeakingRef.current && !bargeInRef.current) return;
+      setText(partial);
+      setLiveTranscript(partial);
+      setMicLastInterim(partial);
+      lastTranscriptRef.current = partial;
+      if (modeRef.current === "entrevistador" && recognitionModeRef.current !== "test") {
+        scheduleInterviewerFlush();
+      }
+    },
+    [scheduleInterviewerFlush],
+  );
+
+  // Trecho final: aplica regra de barge-in, modo teste, entrevistador e envio normal.
+  const routeFinal = useCallback(
+    (done: string) => {
+      if (!done) return;
+      if (isAvatarSpeakingRef.current && !bargeInRef.current) {
+        log(`(avatar falando, barge-in OFF) final ignorado: "${done}"`);
+        return;
+      }
+      setText(done);
+      setLiveTranscript(done);
+      setMicLastFinal(done);
+      setMicLastInterim("");
+      lastTranscriptRef.current = done;
+      if (isAvatarSpeakingRef.current && bargeInRef.current) {
+        try {
+          log("barge-in ON: interrompendo avatar", "ok");
+          (sessionRef.current as any)?.interrupt?.();
+        } catch (e) {
+          logError("interrupt() falhou no barge-in", e);
+        }
+      }
+      if (recognitionModeRef.current === "test") {
+        log(`(modo teste de mic) final NÃO enviado: "${done}"`);
+        return;
+      }
+      if (modeRef.current === "entrevistador") {
+        interviewerBufferRef.current = `${interviewerBufferRef.current} ${done}`.trim();
+        const sec =
+          settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
+        log(`Entrevistador: trecho acumulado ("${done}") — aguardando ${sec}s de silêncio`);
+        scheduleInterviewerFlush();
+        return;
+      }
+      void handleVoiceUtteranceRef.current?.(done);
+    },
+    [log, logError, scheduleInterviewerFlush],
+  );
+
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     log(
@@ -665,10 +810,15 @@ function Index() {
     );
     if (!SR) {
       setSpeechSupported(false);
+      // Padrão inteligente: navegador sem Web Speech → usa Deepgram (universal).
+      if (settingsRef.current.sttEngine !== "deepgram") {
+        log("Navegador sem Web Speech → transcrição trocada para Deepgram", "ok");
+        setSttEngine("deepgram");
+      }
       const message =
-        "Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.";
-      setStatus("microphone", "err", message);
-      log(message, "err");
+        "Web Speech indisponível neste navegador — usando Deepgram (configure a API key).";
+      setStatus("microphone", "waiting", message);
+      log(message);
       return;
     }
 
@@ -684,30 +834,6 @@ function Index() {
     rec.interimResults = true;
     rec.continuous = true;
     rec.maxAlternatives = 1;
-
-    // ===== Entrevistador: paciência nas pausas =====
-    // Em vez de enviar a cada "final", acumula e só envia após um silêncio longo.
-    const flushInterviewer = () => {
-      if (interviewerSilenceTimerRef.current !== null) {
-        window.clearTimeout(interviewerSilenceTimerRef.current);
-        interviewerSilenceTimerRef.current = null;
-      }
-      const buffered = interviewerBufferRef.current.trim();
-      interviewerBufferRef.current = "";
-      setInterviewerWaiting(false);
-      if (buffered) {
-        log(`Entrevistador: pausa longa — enviando resposta completa: "${buffered}"`, "ok");
-        void handleVoiceUtteranceRef.current?.(buffered);
-      }
-    };
-    const scheduleInterviewerFlush = () => {
-      setInterviewerWaiting(true);
-      if (interviewerSilenceTimerRef.current !== null) {
-        window.clearTimeout(interviewerSilenceTimerRef.current);
-      }
-      const sec = settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
-      interviewerSilenceTimerRef.current = window.setTimeout(flushInterviewer, Math.max(0.5, sec) * 1000);
-    };
 
     rec.onstart = () => {
       isRecognitionRunningRef.current = true;
@@ -747,54 +873,13 @@ function Index() {
         const partial = interim.trim();
         resultSinceStartRef.current = true;
 
-        // Se avatar está falando e barge-in está DESLIGADO, ignora tudo.
-        if (isAvatarSpeakingRef.current && !bargeInRef.current) {
-          if (partial) log(`(avatar falando, barge-in OFF) interim ignorado: "${partial}"`);
-          if (finals.length)
-            log(`(avatar falando, barge-in OFF) final ignorado: "${finals.join(" | ")}"`);
-          return;
-        }
-
         if (partial) {
-          setText(partial);
-          setLiveTranscript(partial);
-          setMicLastInterim(partial);
-          lastTranscriptRef.current = partial;
           log(`SpeechRecognition interim: "${partial}"`);
-          // Entrevistador: ainda está falando → adia o fechamento (reinicia o silêncio).
-          if (modeRef.current === "entrevistador" && recognitionModeRef.current !== "test") {
-            scheduleInterviewerFlush();
-          }
+          routeInterim(partial);
         }
-
         for (const done of finals) {
           log(`SpeechRecognition FINAL: "${done}"`, "ok");
-          setText(done);
-          setLiveTranscript(done);
-          setMicLastFinal(done);
-          setMicLastInterim("");
-          lastTranscriptRef.current = done;
-          // Barge-in: se avatar fala e barge-in ON, interrompe antes de processar.
-          if (isAvatarSpeakingRef.current && bargeInRef.current) {
-            try {
-              log("barge-in ON: interrompendo avatar", "ok");
-              (sessionRef.current as any)?.interrupt?.();
-            } catch (e) {
-              logError("interrupt() falhou no barge-in", e);
-            }
-          }
-          if (recognitionModeRef.current === "test") {
-            log(`(modo teste de mic) final NÃO enviado: "${done}"`);
-          } else if (modeRef.current === "entrevistador") {
-            // Entrevistador: acumula o trecho e aguarda a pausa longa (não envia ainda).
-            interviewerBufferRef.current = `${interviewerBufferRef.current} ${done}`.trim();
-            const sec =
-              settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
-            log(`Entrevistador: trecho acumulado ("${done}") — aguardando ${sec}s de silêncio`);
-            scheduleInterviewerFlush();
-          } else {
-            void handleVoiceUtteranceRef.current?.(done);
-          }
+          routeFinal(done);
         }
       } catch (error) {
         logError("Erro dentro de SpeechRecognition onresult", error);
@@ -843,7 +928,174 @@ function Index() {
       } catch {}
       recognitionRef.current = null;
     };
-  }, [log, logError, maybeStartListening, setStatus]);
+  }, [log, logError, maybeStartListening, routeFinal, routeInterim, setSttEngine, setStatus]);
+
+  // ===== Motor Deepgram (alternativa universal ao Web Speech) =====
+  // Captura o microfone, converte para PCM16 e envia por WebSocket ao Deepgram,
+  // que devolve trechos parciais/finais — roteados pelos mesmos handlers.
+  const stopDeepgram = useCallback(() => {
+    if (dgKeepAliveRef.current !== null) {
+      window.clearInterval(dgKeepAliveRef.current);
+      dgKeepAliveRef.current = null;
+    }
+    try {
+      if (dgWsRef.current?.readyState === WebSocket.OPEN) {
+        dgWsRef.current.send(JSON.stringify({ type: "CloseStream" }));
+      }
+    } catch {}
+    try {
+      dgWsRef.current?.close();
+    } catch {}
+    dgWsRef.current = null;
+    try {
+      dgProcRef.current?.disconnect();
+    } catch {}
+    try {
+      dgSourceRef.current?.disconnect();
+    } catch {}
+    try {
+      dgStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      void dgCtxRef.current?.close();
+    } catch {}
+    dgProcRef.current = null;
+    dgSourceRef.current = null;
+    dgStreamRef.current = null;
+    dgCtxRef.current = null;
+  }, []);
+
+  const startDeepgram = useCallback(
+    async (mode: RecognitionMode, reason: string) => {
+      const key = (settingsRef.current.deepgramApiKey || "").trim();
+      if (!key) {
+        const msg = "Deepgram: preencha a API key nas Configurações (aba Avatar).";
+        setStatus("microphone", "err", msg);
+        setMicState("erro");
+        log(msg, "err");
+        return;
+      }
+      recognitionModeRef.current = mode;
+      shouldListenRef.current = true;
+      isMutedRef.current = false;
+      setMuted(false);
+      setLiveTranscript("");
+      setText("");
+      stopDeepgram(); // limpa qualquer sessão anterior
+      try {
+        setMicState("pedindo permissão");
+        setStatus("microphone", "waiting", "Deepgram: pedindo permissão do microfone…");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        dgStreamRef.current = stream;
+        micPermissionGrantedRef.current = true;
+
+        const { token } = await callDeepgramToken({ data: { apiKey: key } });
+
+        const AudioCtx =
+          (window as any).AudioContext || (window as any).webkitAudioContext;
+        const ctx: AudioContext = new AudioCtx();
+        dgCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        dgSourceRef.current = source;
+        const proc = ctx.createScriptProcessor(4096, 1, 1);
+        dgProcRef.current = proc;
+
+        const params = new URLSearchParams({
+          model: "nova-2",
+          language: "pt-BR",
+          encoding: "linear16",
+          sample_rate: String(Math.round(ctx.sampleRate)),
+          channels: "1",
+          interim_results: "true",
+          smart_format: "true",
+          punctuate: "true",
+          endpointing: "300",
+        });
+        const ws = new WebSocket(
+          `wss://api.deepgram.com/v1/listen?${params.toString()}`,
+          ["token", token],
+        );
+        ws.binaryType = "arraybuffer";
+        dgWsRef.current = ws;
+
+        ws.onopen = () => {
+          setListening(true);
+          setMicState("ouvindo");
+          setMicLastError("");
+          setStatus("microphone", "ok", `Deepgram conectado; ouvindo… (${reason})`);
+          log(`Deepgram WS aberto; ouvindo (modo=${mode})`, "ok");
+          dgKeepAliveRef.current = window.setInterval(() => {
+            try {
+              if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "KeepAlive" }));
+            } catch {}
+          }, 8000);
+        };
+        ws.onmessage = (ev) => {
+          try {
+            if (typeof ev.data !== "string") return;
+            const msg = JSON.parse(ev.data);
+            if (msg?.type !== "Results") return;
+            const txt = (msg.channel?.alternatives?.[0]?.transcript ?? "").trim();
+            if (!txt) return;
+            if (msg.is_final) routeFinal(txt);
+            else routeInterim(txt);
+          } catch {}
+        };
+        ws.onerror = (e) => {
+          logError("Deepgram WS erro", e);
+          setStatus("microphone", "err", "Erro no WebSocket do Deepgram");
+        };
+        ws.onclose = () => {
+          if (dgKeepAliveRef.current !== null) {
+            window.clearInterval(dgKeepAliveRef.current);
+            dgKeepAliveRef.current = null;
+          }
+          setListening(false);
+          log("Deepgram WS fechado");
+          // Reconecta se o mic ainda deveria estar ligado (queda de rede etc.).
+          if (shouldListenRef.current && !isMutedRef.current) {
+            window.setTimeout(() => {
+              if (shouldListenRef.current && !isMutedRef.current) {
+                log("Deepgram: reconectando…");
+                dgStartRef.current(recognitionModeRef.current, "reconexão");
+              }
+            }, 1000);
+          }
+        };
+
+        proc.onaudioprocess = (e) => {
+          const ws2 = dgWsRef.current;
+          if (!ws2 || ws2.readyState !== WebSocket.OPEN) return;
+          const input = e.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) {
+            const x = Math.max(-1, Math.min(1, input[i]));
+            pcm[i] = x < 0 ? x * 0x8000 : x * 0x7fff;
+          }
+          try {
+            ws2.send(pcm.buffer);
+          } catch {}
+        };
+        source.connect(proc);
+        proc.connect(ctx.destination);
+      } catch (e: any) {
+        micPermissionGrantedRef.current = false;
+        const msg = formatError(e);
+        setStatus("microphone", "err", `Deepgram falhou: ${msg}`);
+        setMicState("erro");
+        setMicLastError(msg);
+        logError("startDeepgram falhou", e);
+        stopDeepgram();
+      }
+    },
+    [callDeepgramToken, log, logError, routeFinal, routeInterim, setStatus, stopDeepgram],
+  );
+
+  useEffect(() => {
+    dgStartRef.current = startDeepgram;
+  }, [startDeepgram]);
 
   const startRecognition = useCallback(
     async (mode: RecognitionMode, reason: string) => {
@@ -868,8 +1120,12 @@ function Index() {
   );
 
   const startListening = useCallback(() => {
-    void startRecognition("chat", "botão principal/desmutar");
-  }, [startRecognition]);
+    if (settingsRef.current.sttEngine === "deepgram") {
+      void startDeepgram("chat", "botão principal/desmutar");
+    } else {
+      void startRecognition("chat", "botão principal/desmutar");
+    }
+  }, [startDeepgram, startRecognition]);
 
   const muteMic = useCallback(() => {
     isMutedRef.current = true;
@@ -892,14 +1148,15 @@ function Index() {
     } catch (error) {
       logError("recognition.stop() falhou ao mutar", error);
     }
+    stopDeepgram(); // encerra o Deepgram se estiver ativo
     setMicState("desligado");
     setStatus(
       "microphone",
-      speechSupported ? "waiting" : "err",
-      speechSupported ? "Microfone desligado" : "Reconhecimento de voz não suportado",
+      "waiting",
+      "Microfone desligado",
     );
     log("microfone mutado");
-  }, [log, logError, setStatus, speechSupported]);
+  }, [log, logError, setStatus, stopDeepgram]);
 
   const toggleMute = useCallback(() => {
     if (muted) startListening();
@@ -1637,7 +1894,7 @@ function Index() {
   // ===== Recall.ai (bot no Google Meet) =====
   const joinMeetingWithBot = useCallback(async () => {
     const s = settingsRef.current;
-    if (!s.recallApiKey) { log("Recall: API key vazia (Configurações)", "err"); return; }
+    // recallApiKey pode estar vazia: o servidor usa RECALL_API_KEY (.env / Vercel).
     if (!s.meetLink) { log("Recall: Link do Google Meet vazio (Configurações)", "err"); return; }
     if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
     setBotJoining(true);
@@ -1668,7 +1925,7 @@ function Index() {
   // que faz o avatar aparecer e falar DENTRO da reunião. Não toca nas Camadas 1/2.
   const joinMeetingWithAvatar = useCallback(async () => {
     const s = settingsRef.current;
-    if (!s.recallApiKey) { log("Recall: API key vazia (Configurações)", "err"); return; }
+    // recallApiKey pode estar vazia: o servidor usa RECALL_API_KEY (.env / Vercel).
     if (!s.meetLink) { log("Recall: Link do Google Meet vazio (Configurações)", "err"); return; }
     if (!s.avatarBaseUrl) { log('Camada 3: "URL pública do avatar" vazia. Publique no Lovable e cole a URL base em Configurações.', "err"); return; }
     if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
@@ -2262,9 +2519,11 @@ function Index() {
       </div>
 
       <main className="mx-auto flex w-full max-w-[1800px] flex-col gap-4 p-3 sm:p-4 md:p-6 lg:p-8">
-        {!speechSupported && (
+        {!speechSupported && settings.sttEngine !== "deepgram" && (
           <div className="rounded-md border border-destructive bg-card p-4 text-lg font-semibold text-destructive">
-            Este navegador não tem reconhecimento de voz. Abra no Google Chrome no computador.
+            Este navegador não tem reconhecimento de voz (Web Speech). Abra no Google Chrome no
+            computador — ou troque a transcrição para <strong>Deepgram</strong> (funciona em
+            todos os navegadores) no seletor abaixo / nas Configurações.
           </div>
         )}
 
@@ -2306,7 +2565,7 @@ function Index() {
             <div className="grid gap-3 md:grid-cols-[auto_1fr] md:items-center">
               <button
                 onClick={toggleMute}
-                disabled={!speechSupported}
+                disabled={!speechSupported && settings.sttEngine !== "deepgram"}
                 aria-label={muted ? "Ativar microfone" : "Mutar microfone"}
                 className={`relative h-20 w-20 rounded-full border-2 text-3xl transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                   listening
@@ -2446,6 +2705,48 @@ function Index() {
           </div>
 
           <aside className="flex flex-col gap-3">
+            <div className="rounded-md border border-border bg-card p-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Transcrição da voz</span>
+                {!speechSupported && (
+                  <span className="text-[10px] text-destructive">Web Speech indisponível neste navegador</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSttEngine("webspeech")}
+                  title="Reconhecimento do navegador (grátis, só Chrome/Edge)"
+                  className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                    settings.sttEngine === "webspeech"
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-border bg-card text-foreground hover:bg-muted"
+                  }`}
+                >
+                  Web Speech
+                  <span className="block text-[9px] font-normal opacity-80">Chrome/Edge · grátis</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSttEngine("deepgram")}
+                  title="Deepgram (funciona em todos os navegadores; requer API key nas Configurações)"
+                  className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                    settings.sttEngine === "deepgram"
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-border bg-card text-foreground hover:bg-muted"
+                  }`}
+                >
+                  Deepgram
+                  <span className="block text-[9px] font-normal opacity-80">todos os navegadores</span>
+                </button>
+              </div>
+              {settings.sttEngine === "deepgram" && (
+                <span className="mt-1 block text-[10px] text-muted-foreground">
+                  Usa a chave do Deepgram do servidor (.env / Vercel).
+                </span>
+              )}
+            </div>
+
             <div className="flex gap-2">
               {!connected ? (
                 <button
@@ -2658,7 +2959,7 @@ function Index() {
           <div className="flex items-center justify-center gap-3 border-t border-white/10 bg-black/80 px-4 py-4">
             <button
               onClick={toggleMute}
-              disabled={!speechSupported}
+              disabled={!speechSupported && settings.sttEngine !== "deepgram"}
               title={muted ? "Ativar microfone" : "Mutar microfone"}
               className={`flex h-12 w-12 items-center justify-center rounded-full text-xl transition-colors ${
                 muted ? "bg-destructive text-destructive-foreground" : "bg-white/15 text-white hover:bg-white/25"
@@ -2736,7 +3037,7 @@ function Index() {
 
             {(() => {
               const req = (v: string) => (v ?? "").trim() !== "";
-              const avatarOk = (["apiKey", "avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]).every(
+              const avatarOk = (["avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]).every(
                 (k) => req(settingsDraft[k] as string),
               );
               const webhooksOk = (["webhookConversa", "webhookReuniao", "webhookEntrevistador", "webhookFiller"] as (keyof Settings)[]).every(
@@ -2818,20 +3119,119 @@ function Index() {
                   Credenciais e identificadores do avatar. Campos com{" "}
                   <span className="text-destructive">*</span> são obrigatórios para conectar.
                 </p>
+
+                <div className="space-y-2 rounded-md border border-border bg-background/40 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">
+                      Puxar da API HeyGen
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void loadAvatarVoiceLists()}
+                      disabled={apiListLoading}
+                      className="rounded-md border border-border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      {apiListLoading ? "Carregando…" : "🔄 Carregar avatares e vozes"}
+                    </button>
+                  </div>
+                  {apiListError && (
+                    <span className="block text-xs text-destructive">{apiListError}</span>
+                  )}
+                  {avatarOptions.length > 0 && (
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-xs font-medium">Avatar</span>
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const sel = avatarOptions.find((o) => o.id === settingsDraft.avatarId);
+                          return sel?.previewUrl ? (
+                            <img
+                              src={sel.previewUrl}
+                              alt={sel.name}
+                              className="h-12 w-12 shrink-0 rounded-md border border-border object-cover"
+                            />
+                          ) : null;
+                        })()}
+                        <select
+                          value={settingsDraft.avatarId}
+                          onChange={(e) => {
+                            const opt = avatarOptions.find((o) => o.id === e.target.value);
+                            setSettingsDraft((d) => ({
+                              ...d,
+                              avatarId: e.target.value,
+                              posterUrl: opt?.previewUrl || d.posterUrl,
+                              voiceId: opt?.defaultVoiceId || d.voiceId,
+                            }));
+                          }}
+                          className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                        >
+                          <option value="">— selecione —</option>
+                          <optgroup label="Meus avatares">
+                            {avatarOptions
+                              .filter((o) => o.owned)
+                              .map((o) => (
+                                <option key={o.id} value={o.id}>
+                                  {o.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                          <optgroup label="Públicos">
+                            {avatarOptions
+                              .filter((o) => !o.owned)
+                              .map((o) => (
+                                <option key={o.id} value={o.id}>
+                                  {o.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                        </select>
+                      </div>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Ao escolher, preenche o ID do avatar, o preview e a voz padrão dele
+                        automaticamente.
+                      </span>
+                    </label>
+                  )}
+                  {voiceOptions.length > 0 && (
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-xs font-medium">Voz (presets da API)</span>
+                      <select
+                        value={settingsDraft.voiceId}
+                        onChange={(e) =>
+                          setSettingsDraft((d) => ({ ...d, voiceId: e.target.value }))
+                        }
+                        className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm"
+                      >
+                        <option value="">— selecione —</option>
+                        {voiceOptions.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.name}
+                            {o.language ? ` (${o.language})` : ""}
+                            {o.gender ? ` · ${o.gender}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        ⚠️ A API só lista vozes em inglês. Para a voz em português (custom), use
+                        o campo <strong>ID da Voz</strong> manual abaixo.
+                      </span>
+                    </label>
+                  )}
+                </div>
+
                 {(
                   [
-                    ["apiKey", "Chave da API HeyGen", "api_key"],
-                    ["avatarId", "ID do Avatar", "avatar_id"],
-                    ["voiceId", "ID da Voz", "voice_id"],
-                    ["contextId", "ID do Contexto/Persona", "context_id"],
-                    ["language", "Idioma", "language (ex: pt)"],
-                  ] as [keyof Settings, string, string][]
-                ).map(([key, label, hint]) => {
-                  const missing = (settingsDraft[key] as string).trim() === "";
+                    ["apiKey", "Chave da API HeyGen", "api_key", false],
+                    ["avatarId", "ID do Avatar", "avatar_id", true],
+                    ["voiceId", "ID da Voz", "voice_id", true],
+                    ["contextId", "ID do Contexto/Persona", "context_id", true],
+                    ["language", "Idioma", "language (ex: pt)", true],
+                  ] as [keyof Settings, string, string, boolean][]
+                ).map(([key, label, hint, required]) => {
+                  const missing = required && (settingsDraft[key] as string).trim() === "";
                   return (
                   <label key={key} className="block text-sm">
                     <span className="mb-1 flex items-center gap-1 font-medium">
-                      {label} <span className="text-destructive">*</span>
+                      {label} {required && <span className="text-destructive">*</span>}
                       <span className="font-mono text-[10px] font-normal text-muted-foreground">({hint})</span>
                     </span>
                     <input
@@ -2839,11 +3239,18 @@ function Index() {
                       onChange={(e) =>
                         setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))
                       }
+                      placeholder={key === "apiKey" ? "(usa a variável de ambiente do servidor)" : undefined}
                       className={`w-full rounded-md border bg-input px-3 py-2 font-mono text-xs ${
                         missing ? "border-destructive ring-1 ring-destructive" : "border-border"
                       }`}
                     />
                     {missing && <span className="mt-1 block text-xs text-destructive">Obrigatório</span>}
+                    {key === "apiKey" && (
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Opcional: deixe vazio para usar a <strong>HEYGEN_API_KEY</strong> do
+                        servidor (.env / Vercel). Preencha só para sobrescrever.
+                      </span>
+                    )}
                   </label>
                   );
                 })}
@@ -2870,6 +3277,25 @@ function Index() {
                       className="mt-2 h-32 w-auto rounded-md border border-border object-cover"
                     />
                   )}
+                </label>
+
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium">
+                    Deepgram API Key (opcional — sobrescreve a do servidor)
+                  </span>
+                  <input
+                    value={settingsDraft.deepgramApiKey}
+                    onChange={(e) =>
+                      setSettingsDraft((d) => ({ ...d, deepgramApiKey: e.target.value }))
+                    }
+                    placeholder="(usa a DEEPGRAM_API_KEY do servidor)"
+                    className="w-full rounded-md border border-border bg-input px-3 py-2 font-mono text-xs"
+                  />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Deixe vazio para usar a <strong>DEEPGRAM_API_KEY</strong> do servidor (.env /
+                    Vercel) — recomendado. A key é usada no servidor pra gerar um token
+                    temporário; o navegador nunca recebe a key crua.
+                  </span>
                 </label>
               </fieldset>
               )}

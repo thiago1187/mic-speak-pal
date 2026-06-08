@@ -23,6 +23,11 @@ dist-ssr
 # Vercel
 .vercel
 
+# Variáveis de ambiente / segredos (NÃO commitar). .env.example é commitado.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
