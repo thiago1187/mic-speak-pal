@@ -990,14 +990,8 @@ function Index() {
 
   const startDeepgram = useCallback(
     async (mode: RecognitionMode, reason: string) => {
+      // A key pode estar vazia no cliente: o servidor usa a DEEPGRAM_API_KEY (.env / Vercel).
       const key = (settingsRef.current.deepgramApiKey || "").trim();
-      if (!key) {
-        const msg = "Deepgram: preencha a API key nas Configurações (aba Avatar).";
-        setStatus("microphone", "err", msg);
-        setMicState("erro");
-        log(msg, "err");
-        return;
-      }
       recognitionModeRef.current = mode;
       shouldListenRef.current = true;
       isMutedRef.current = false;
