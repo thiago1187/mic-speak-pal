@@ -5,6 +5,7 @@ import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveav
 import {
   getSessionToken,
   getDeepgramToken,
+  getEnvStatus,
   listAvatars,
   listVoices,
   type AvatarOption,
@@ -342,6 +343,7 @@ function Index() {
   const callListAvatars = useServerFn(listAvatars);
   const callListVoices = useServerFn(listVoices);
   const callDeepgramToken = useServerFn(getDeepgramToken);
+  const callEnvStatus = useServerFn(getEnvStatus);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -722,6 +724,27 @@ function Index() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [logs]);
+
+  // Diagnóstico: checa se o SERVIDOR enxerga as variáveis de ambiente (.env / Vercel).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const st = await callEnvStatus();
+        log(
+          `[env servidor] HEYGEN=${st.heygen} DEEPGRAM=${st.deepgram} RECALL=${st.recall}`,
+          st.heygen ? "ok" : "err",
+        );
+        if (!st.heygen) {
+          log(
+            "⚠️ O servidor NÃO está enxergando HEYGEN_API_KEY. Na Vercel: confirme a variável em Production e faça um Redeploy (sem cache).",
+            "err",
+          );
+        }
+      } catch (e) {
+        logError("checagem de env do servidor falhou", e);
+      }
+    })();
+  }, [callEnvStatus, log, logError]);
 
   // ===== Roteamento de transcrição (compartilhado entre Web Speech e Deepgram) =====
   // Entrevistador: acumula e só envia após silêncio longo.

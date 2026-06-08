@@ -97,6 +97,13 @@ export const getDeepgramToken = createServerFn({ method: "POST" })
     return { token: apiKey, temporary: false };
   });
 
+// Diagnóstico: o servidor enxerga as variáveis de ambiente? (retorna só booleans).
+export const getEnvStatus = createServerFn({ method: "GET" }).handler(async () => ({
+  heygen: Boolean((process.env.HEYGEN_API_KEY || "").trim()),
+  deepgram: Boolean((process.env.DEEPGRAM_API_KEY || "").trim()),
+  recall: Boolean((process.env.RECALL_API_KEY || "").trim()),
+}));
+
 type ListInput = { apiKey?: string };
 
 export type AvatarOption = {
