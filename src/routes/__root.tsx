@@ -87,6 +87,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:site", content: "@Lovable" },
       { name: "twitter:title", content: "Lovable App" },
       { name: "twitter:description", content: "Web app for testing HeyGen LiveAvatar with microphone input." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/063565fe-3bae-46ee-8ab6-3b564b395a36/id-preview-537150c8--dc025edc-ea0b-4682-ad4d-6583d0591e5a.lovable.app-1781005685202.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/063565fe-3bae-46ee-8ab6-3b564b395a36/id-preview-537150c8--dc025edc-ea0b-4682-ad4d-6583d0591e5a.lovable.app-1781005685202.png" },
     ],
     links: [
       {
