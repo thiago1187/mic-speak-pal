@@ -38,6 +38,9 @@ const MODE_KEY = "liveavatar.mode.v1";
 // Entrevistador: pausa de silêncio (s) antes de considerar que a pessoa terminou.
 // Fallback caso a config não esteja salva. Ajustável na UI (entrevistadorSilenceSec).
 const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 1;
+// Conversa/Reunião: tempo de silêncio (s) antes de fechar a fala e enviar — evita
+// cortar a frase no meio quando o STT finaliza cedo numa pausa curta.
+const SPEECH_FLUSH_SEC_DEFAULT = 1;
 // Hot-swap: tempo após (re)conectar para pré-aquecer uma NOVA sessão e trocar,
 // driblando o limite de duração por sessão do plano (Starter = 5 min, até 5 sessões
 // simultâneas). O "cérebro" (n8n) é independente da sessão HeyGen, então o contexto
@@ -861,8 +864,9 @@ function Index() {
   }, [callEnvStatus, log, logError]);
 
   // ===== Roteamento de transcrição (compartilhado entre Web Speech e Deepgram) =====
-  // Entrevistador: acumula e só envia após silêncio longo.
-  const flushInterviewer = useCallback(() => {
+  // TODOS os modos: acumula a fala e só envia depois de um silêncio real. Isso evita
+  // o STT finalizar no meio da frase (numa pausa curta) e mandar a fala picada/2x.
+  const flushSpeech = useCallback(() => {
     if (interviewerSilenceTimerRef.current !== null) {
       window.clearTimeout(interviewerSilenceTimerRef.current);
       interviewerSilenceTimerRef.current = null;
@@ -871,21 +875,28 @@ function Index() {
     interviewerBufferRef.current = "";
     setInterviewerWaiting(false);
     if (buffered) {
-      log(`Entrevistador: pausa longa — enviando resposta completa: "${buffered}"`, "ok");
+      log(`fala completa (após silêncio) → enviando: "${buffered}"`, "ok");
       void handleVoiceUtteranceRef.current?.(buffered);
     }
   }, [log]);
 
-  const scheduleInterviewerFlush = useCallback(() => {
-    setInterviewerWaiting(true);
+  // (Re)agenda o fechamento da fala. Enquanto chegam parciais/finais, o timer reinicia
+  // — só dispara quando o usuário realmente para. Janela por modo.
+  const scheduleSpeechFlush = useCallback(() => {
+    // O aviso "ouvindo… pode pausar" só faz sentido no Entrevistador.
+    setInterviewerWaiting(modeRef.current === "entrevistador");
     if (interviewerSilenceTimerRef.current !== null) {
       window.clearTimeout(interviewerSilenceTimerRef.current);
     }
-    const sec = settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
-    interviewerSilenceTimerRef.current = window.setTimeout(flushInterviewer, Math.max(0.5, sec) * 1000);
-  }, [flushInterviewer]);
+    const sec =
+      modeRef.current === "entrevistador"
+        ? settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT
+        : SPEECH_FLUSH_SEC_DEFAULT;
+    interviewerSilenceTimerRef.current = window.setTimeout(flushSpeech, Math.max(0.4, sec) * 1000);
+  }, [flushSpeech]);
 
-  // Trecho parcial (interim): atualiza a transcrição ao vivo.
+  // Trecho parcial (interim): atualiza a transcrição ao vivo e ADIA o envio (usuário
+  // ainda está falando).
   const routeInterim = useCallback(
     (partial: string) => {
       if (!partial) return;
@@ -894,14 +905,12 @@ function Index() {
       setLiveTranscript(partial);
       setMicLastInterim(partial);
       lastTranscriptRef.current = partial;
-      if (modeRef.current === "entrevistador" && recognitionModeRef.current !== "test") {
-        scheduleInterviewerFlush();
-      }
+      if (recognitionModeRef.current !== "test") scheduleSpeechFlush();
     },
-    [scheduleInterviewerFlush],
+    [scheduleSpeechFlush],
   );
 
-  // Trecho final: aplica regra de barge-in, modo teste, entrevistador e envio normal.
+  // Trecho final: barge-in + acúmulo. NÃO envia na hora — espera o silêncio (flush).
   const routeFinal = useCallback(
     (done: string) => {
       if (!done) return;
@@ -926,17 +935,11 @@ function Index() {
         log(`(modo teste de mic) final NÃO enviado: "${done}"`);
         return;
       }
-      if (modeRef.current === "entrevistador") {
-        interviewerBufferRef.current = `${interviewerBufferRef.current} ${done}`.trim();
-        const sec =
-          settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT;
-        log(`Entrevistador: trecho acumulado ("${done}") — aguardando ${sec}s de silêncio`);
-        scheduleInterviewerFlush();
-        return;
-      }
-      void handleVoiceUtteranceRef.current?.(done);
+      // Acumula o trecho e (re)agenda o envio pós-silêncio (vale pra todos os modos).
+      interviewerBufferRef.current = `${interviewerBufferRef.current} ${done}`.trim();
+      scheduleSpeechFlush();
     },
-    [log, logError, scheduleInterviewerFlush],
+    [log, logError, scheduleSpeechFlush],
   );
 
   useEffect(() => {
