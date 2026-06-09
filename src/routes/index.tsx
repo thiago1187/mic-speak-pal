@@ -118,19 +118,19 @@ const DEFAULT_SETTINGS: Settings = {
   meetConfigs: {
     conversa: {
       greeting: "Olá! Eu sou o Renante, da Gravidade Zero. Podem falar comigo à vontade.",
-      reconnectGreeting: "",
+      reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "always",
       bargeIn: false,
     },
     reuniao: {
       greeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
-      reconnectGreeting: "",
+      reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "wake",
       bargeIn: false,
     },
     entrevistador: {
       greeting: "Oi! Eu sou o Renante e vou conduzir essa conversa. Podem responder quando quiserem.",
-      reconnectGreeting: "",
+      reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "always",
       bargeIn: false,
     },
