@@ -106,7 +106,7 @@ const DEFAULT_SETTINGS: Settings = {
   webhookFiller: "https://n8n.srv1435894.hstgr.cloud/webhook/filler",
   apiKey: "", // vem do servidor (HEYGEN_API_KEY no .env / Vercel); vazio aqui = usa a env
   avatarId: "f79bd86d-ec79-4ff6-85e9-2eee714eaa0e",
-  voiceId: "ef51b5eb-5b39-4e6d-84e8-8b49a1b2e098",
+  voiceId: "ca1b4b31-2951-4201-a697-297469c05baf",
   contextId: "620eb98d-45ae-4a6c-9971-2c0915b4c279",
   language: "pt",
   meetLink: "",
