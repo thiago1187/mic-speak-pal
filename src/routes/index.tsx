@@ -3823,7 +3823,7 @@ function Index() {
                 ? "amber"
                 : "off";
         return (
-        <div className="fixed inset-0 z-40 select-none bg-black text-white">
+        <div className="fixed inset-0 z-[1000] select-none bg-black text-white">
           {/* Avatar feed em tela cheia (fundo) */}
           <video
             ref={meetVideoRef}
