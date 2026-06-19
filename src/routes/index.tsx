@@ -3340,41 +3340,41 @@ function Index() {
         <div ref={(el) => { panelRefs.current["ready"] = el; }} data-pid="ready" className="panel" style={pStyle("ready", { gridColumn: "11/13", gridRow: 1 })}>
           <div className="ph">
             <div className="drag" onPointerDown={(e) => startMove(e, "ready")}>⠿</div>
-            <span className="ico">✅</span>
-            <span className="tt">Config <small>· prontidão</small></span>
+            <span className="ico" style={{ fontWeight: 700, fontSize: 13 }}>✓</span>
+            <span className="tt">Prontidão <small>· 4 painéis</small></span>
           </div>
           <div className="pb">
             {(() => {
               const req = (v: string) => (v ?? "").trim() !== "";
-              const avatarOk = (
-                ["avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]
-              ).every((k) => req(settings[k] as string));
-              const webhooksOk = (
-                [
+              const avatarFields = ["avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[];
+              const avatarFilledCount = avatarFields.filter((k) => req(settings[k] as string)).length;
+              const avatarOk = avatarFilledCount === avatarFields.length;
+              const webhookFields = [
                   "webhookConversa",
                   "webhookReuniao",
                   "webhookEntrevistador",
                   "webhookFiller",
-                ] as (keyof Settings)[]
-              ).every((k) => req(settings[k] as string));
+                ] as (keyof Settings)[];
+              const webhooksFilledCount = webhookFields.filter((k) => req(settings[k] as string)).length;
+              const webhooksOk = webhooksFilledCount === webhookFields.length;
               return (
                 <div className="statlist">
                   {(
                     [
                       {
                         nm: "Avatar & Voz",
-                        sub: "heygen",
+                        sub: "heygen liveavatar",
                         ok: avatarOk,
-                        vl: avatarOk ? "ok" : "API key ausente",
+                        vl: avatarOk ? `${avatarFilledCount}/${avatarFields.length} ok` : `${avatarFilledCount}/${avatarFields.length} configurados`,
                       },
                       {
                         nm: "Webhooks n8n",
                         sub: "4 endpoints",
                         ok: webhooksOk,
-                        vl: webhooksOk ? "4/4 ok" : "incompleto",
+                        vl: `${webhooksFilledCount}/${webhookFields.length} configurados`,
                       },
                       { nm: "Modos", sub: "comportamento", ok: true, vl: "ok" },
-                      { nm: "Recall", sub: "opcional", ok: true, vl: "opcional" },
+                      { nm: "Recall", sub: "camada 3 · opcional", ok: true, vl: "opcional" },
                     ] as { nm: string; sub: string; ok: boolean; vl: string }[]
                   ).map((r) => (
                     <div className="statrow" key={r.nm}>
@@ -3535,16 +3535,25 @@ function Index() {
                 { id: "reuniao" as Mode, name: "Reunião", tag: "wake word", tagCls: "blue" },
                 { id: "entrevistador" as Mode, name: "Entrevistador", tag: "sempre ativo", tagCls: "" },
               ]).map((m) => {
-                const cfg = settings.meetConfigs[m.id] ?? { reconnectGreeting: "", behavior: "always" as const, bargeIn: false };
+                const cfg = settings.meetConfigs[m.id] ?? { greeting: "", reconnectGreeting: "", behavior: "always" as const, bargeIn: false };
                 return (
                   <div key={m.id} className={`modecard${mode === m.id ? " active" : ""}`} onClick={() => setMode(m.id)}>
                     <div className="mh"><b>{m.name}</b><span className={`modetag${mode === m.id ? " active" : m.tagCls ? " " + m.tagCls : ""}`}>{m.tag}</span></div>
                     <div>
-                      <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala inicial (ao conectar)</label>
+                      <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala ao entrar <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink-3)", marginLeft: 4 }}>1ª conexão</span></label>
+                      <textarea className="inp" rows={2} spellCheck={false}
+                        value={cfg.greeting}
+                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], greeting: e.target.value } } }))}
+                        placeholder="Fala ao conectar pela 1ª vez…"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala ao reconectar <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink-3)", marginLeft: 4 }}>hot-swap</span></label>
                       <textarea className="inp" rows={2} spellCheck={false}
                         value={cfg.reconnectGreeting}
                         onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], reconnectGreeting: e.target.value } } }))}
-                        placeholder="Fala ao conectar…"
+                        placeholder="Fala ao reconectar (hot-swap)…"
                         onClick={(e) => e.stopPropagation()}
                       />
                     </div>
@@ -3633,9 +3642,48 @@ function Index() {
               <div className={`field wide req${!settings.apiKey ? " err" : ""}`}>
                 <label>Chave da API HeyGen <span className="hint">api_key</span></label>
                 <input className="inp pass" type="password" value={settings.apiKey}
-                  onChange={(e) => updateSetting("apiKey", e.target.value)} spellCheck={false} placeholder="hk-…" />
-                {!settings.apiKey && <div className="reqmsg">Obrigatório</div>}
+                  onChange={(e) => updateSetting("apiKey", e.target.value)} spellCheck={false} placeholder="hk-… (ou usa env do servidor)" />
+                {!settings.apiKey && <div className="reqmsg" style={{ color: "var(--ink-3)" }}>Opcional — usa HEYGEN_API_KEY do servidor se vazio</div>}
               </div>
+
+              {/* puxar listas da API HeyGen */}
+              <div className="field wide" style={{ background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Puxar da API HeyGen</span>
+                  <button className="btn sm" onClick={() => void loadAvatarVoiceLists()} disabled={apiListLoading}>
+                    {apiListLoading ? "Carregando…" : "🔄 Carregar avatares e vozes"}
+                  </button>
+                </div>
+                {apiListError && <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--red)", marginTop: 4 }}>{apiListError}</div>}
+                {avatarOptions.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Avatar</label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {(() => { const sel = avatarOptions.find((o) => o.id === settings.avatarId); return sel?.previewUrl ? <img src={sel.previewUrl} alt={sel.name} style={{ width: 36, height: 36, borderRadius: 4, objectFit: "cover", border: "1px solid var(--border)", flexShrink: 0 }} /> : null; })()}
+                      <select className="inp" value={settings.avatarId} onChange={(e) => {
+                        const opt = avatarOptions.find((o) => o.id === e.target.value);
+                        updateSetting("avatarId", e.target.value);
+                        if (opt?.previewUrl) updateSetting("posterUrl", opt.previewUrl);
+                        if (opt?.defaultVoiceId) updateSetting("voiceId", opt.defaultVoiceId);
+                      }}>
+                        <option value="">— selecione —</option>
+                        <optgroup label="Meus avatares">{avatarOptions.filter((o) => o.owned).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</optgroup>
+                        <optgroup label="Públicos">{avatarOptions.filter((o) => !o.owned).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</optgroup>
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {voiceOptions.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Voz <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink-3)", marginLeft: 4 }}>presets da API</span></label>
+                    <select className="inp" value={settings.voiceId} onChange={(e) => updateSetting("voiceId", e.target.value)}>
+                      <option value="">— selecione —</option>
+                      {voiceOptions.map((o) => <option key={o.id} value={o.id}>{o.name}{o.language ? ` (${o.language})` : ""}{o.gender ? ` · ${o.gender}` : ""}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               <div className={`field wide req${!settings.avatarId ? " err" : ""}`}>
                 <label>ID do Avatar <span className="hint">avatar_id</span></label>
                 <input className="inp" value={settings.avatarId}
@@ -3660,6 +3708,11 @@ function Index() {
                 <label>Poster do avatar <span className="hint">url</span></label>
                 <input className="inp" value={settings.posterUrl}
                   onChange={(e) => updateSetting("posterUrl", e.target.value)} spellCheck={false} placeholder="https://…/preview.png" />
+              </div>
+              <div className="field wide">
+                <label>Deepgram API Key <span className="hint">opcional — sobrescreve a do servidor</span></label>
+                <input className="inp pass" type="password" value={settings.deepgramApiKey}
+                  onChange={(e) => updateSetting("deepgramApiKey", e.target.value)} spellCheck={false} placeholder="(usa DEEPGRAM_API_KEY do servidor)" />
               </div>
             </div>
           </div>
