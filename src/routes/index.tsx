@@ -632,6 +632,22 @@ function Index() {
   const botIdRef = useRef<string | null>(null);
   const recallSeenCountRef = useRef(0);
   const recallPollTimerRef = useRef<number | null>(null);
+
+  // ── bento free-form layout ──
+  type PanelRect = { x: number; y: number; w: number; h: number };
+  const BENTO_KEY = "avatarConsole.freeform.v1";
+  const [bentoReady, setBentoReady] = useState(false);
+  const [bentoRects, setBentoRects] = useState<Record<string, PanelRect>>({});
+  const [bentoCell, setBentoCell] = useState(20);
+  const [bentoSnap, setBentoSnap] = useState(true);
+  const [bentoEdit, setBentoEdit] = useState(false);
+  const [bentoPopOpen, setBentoPopOpen] = useState(false);
+  const [bentoDestMeet, setBentoDestMeet] = useState(false);
+  const bentoRef = useRef<HTMLDivElement>(null);
+  const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const zTopRef = useRef(10);
+  const ghostRef = useRef<HTMLDivElement>(null);
+
   // CAMADA 3: quando o avatar está DENTRO do Meet, a página /meet fala por si;
   // aqui não falamos localmente (evita fala duplicada), só logamos a transcrição.
   const avatarInMeetRef = useRef(false);
@@ -2624,7 +2640,241 @@ function Index() {
     }
   }, [diagReport]);
 
+  // ── helper: update a setting inline (saves immediately) ──
+  function updateSetting<K extends keyof Settings>(key: K, val: Settings[K]) {
+    setSettings((s) => {
+      const next = { ...s, [key]: val };
+      settingsRef.current = next;
+      try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setSettingsDraft((d) => ({ ...d, [key]: val }));
+  }
 
+  // ── bento: seed positions from grid on first mount ──
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const raw = window.localStorage.getItem(BENTO_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as { rects?: Record<string, PanelRect>; cell?: number; snap?: boolean };
+        if (saved?.rects && Object.keys(saved.rects).length > 0) {
+          setBentoRects(saved.rects);
+          if (typeof saved.cell === "number") setBentoCell(saved.cell);
+          if (typeof saved.snap === "boolean") setBentoSnap(saved.snap);
+          setBentoReady(true);
+          return;
+        }
+      }
+    } catch {}
+    const rafId = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const be = bentoRef.current;
+      if (!be) { setBentoReady(true); return; }
+      const bRect = be.getBoundingClientRect();
+      const bs = getComputedStyle(be);
+      const ox = bRect.left + parseFloat(bs.paddingLeft || "0") + parseFloat(bs.borderLeftWidth || "0");
+      const oy = bRect.top + parseFloat(bs.paddingTop || "0") + parseFloat(bs.borderTopWidth || "0");
+      const s20 = (v: number) => Math.round(v / 20) * 20;
+      const rects: Record<string, PanelRect> = {};
+      Object.entries(panelRefs.current).forEach(([pid, el]) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        rects[pid] = { x: s20(r.left - ox), y: s20(r.top - oy), w: s20(r.width), h: Math.max(80, s20(r.height)) };
+      });
+      setBentoRects(rects);
+      setBentoReady(true);
+    });
+    return () => { cancelled = true; cancelAnimationFrame(rafId); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── bento: save to localStorage on change ──
+  useEffect(() => {
+    if (!bentoReady) return;
+    try { window.localStorage.setItem(BENTO_KEY, JSON.stringify({ rects: bentoRects, cell: bentoCell, snap: bentoSnap })); } catch {}
+    const be = bentoRef.current;
+    if (!be) return;
+    let max = 0;
+    for (const r of Object.values(bentoRects)) max = Math.max(max, r.y + r.h);
+    be.style.height = (max + bentoCell * 2) + "px";
+    document.documentElement.style.setProperty("--cell", bentoCell + "px");
+  }, [bentoReady, bentoRects, bentoCell, bentoSnap]);
+
+  // ── bento: close layout popover on outside click ──
+  useEffect(() => {
+    if (!bentoPopOpen) return;
+    const close = () => setBentoPopOpen(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [bentoPopOpen]);
+
+  // ── bento: drag handler ──
+  function startMove(e: React.PointerEvent, id: string) {
+    if (!bentoEdit || !bentoReady) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const grip = e.currentTarget as HTMLElement;
+    try { grip.setPointerCapture(e.pointerId); } catch {}
+    const rect = bentoRects[id];
+    if (!rect) return;
+    const sx = e.clientX, sy = e.clientY;
+    const ox = rect.x, oy = rect.y;
+    const cell = bentoCell;
+    const snapFn = bentoSnap ? (v: number) => Math.round(v / cell) * cell : (v: number) => Math.round(v);
+    const el = panelRefs.current[id];
+    if (el) {
+      zTopRef.current++;
+      el.style.zIndex = String(zTopRef.current);
+      el.classList.add("dragging");
+    }
+    const be = bentoRef.current;
+    be?.classList.add("reordering");
+    const gh = ghostRef.current;
+    if (gh) Object.assign(gh.style, { display: "block", width: rect.w + "px", height: rect.h + "px", left: rect.x + "px", top: rect.y + "px" });
+    let cur = { ...rect };
+    function onMove(ev: PointerEvent) {
+      const nx = Math.max(0, ox + (ev.clientX - sx));
+      const ny = Math.max(0, oy + (ev.clientY - sy));
+      if (el) { el.style.left = nx + "px"; el.style.top = ny + "px"; }
+      cur = { x: snapFn(nx), y: Math.max(0, snapFn(ny)), w: rect.w, h: rect.h };
+      if (gh) { gh.style.left = cur.x + "px"; gh.style.top = cur.y + "px"; }
+      if (be) { const minH = cur.y + cur.h + cell * 2; if (minH > parseFloat(be.style.height || "0")) be.style.height = minH + "px"; }
+    }
+    function onUp() {
+      grip.removeEventListener("pointermove", onMove);
+      grip.removeEventListener("pointerup", onUp);
+      el?.classList.remove("dragging");
+      be?.classList.remove("reordering");
+      if (gh) gh.style.display = "none";
+      if (el) { el.style.left = cur.x + "px"; el.style.top = cur.y + "px"; }
+      setBentoRects((prev) => ({ ...prev, [id]: cur }));
+    }
+    grip.addEventListener("pointermove", onMove);
+    grip.addEventListener("pointerup", onUp);
+  }
+
+  // ── bento: resize handler ──
+  function startResize(e: React.PointerEvent, id: string, mode: "se" | "e" | "s") {
+    if (!bentoEdit || !bentoReady) return;
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const grip = e.currentTarget as HTMLElement;
+    try { grip.setPointerCapture(e.pointerId); } catch {}
+    const rect = bentoRects[id];
+    if (!rect) return;
+    const sx = e.clientX, sy = e.clientY;
+    const ow = rect.w, oh = rect.h;
+    const cell = bentoCell;
+    const snapFn = bentoSnap ? (v: number) => Math.round(v / cell) * cell : (v: number) => Math.round(v);
+    const minW = Math.max(180, cell * 6);
+    const minH = Math.max(96, cell * 4);
+    const el = panelRefs.current[id];
+    if (el) { zTopRef.current++; el.style.zIndex = String(zTopRef.current); el.classList.add("resizing"); }
+    const be = bentoRef.current;
+    be?.classList.add("reordering");
+    const gh = ghostRef.current;
+    if (gh) Object.assign(gh.style, { display: "block", width: rect.w + "px", height: rect.h + "px", left: rect.x + "px", top: rect.y + "px" });
+    let cur = { ...rect };
+    function onMove(ev: PointerEvent) {
+      let nw = ow, nh = oh;
+      if (mode !== "s") nw = Math.max(minW, ow + (ev.clientX - sx));
+      if (mode !== "e") nh = Math.max(minH, oh + (ev.clientY - sy));
+      if (el) { el.style.width = nw + "px"; el.style.height = nh + "px"; }
+      cur = { x: rect.x, y: rect.y, w: Math.max(minW, snapFn(nw)), h: Math.max(minH, snapFn(nh)) };
+      if (gh) { gh.style.width = cur.w + "px"; gh.style.height = cur.h + "px"; }
+      if (be) { const minHs = cur.y + cur.h + cell * 2; if (minHs > parseFloat(be.style.height || "0")) be.style.height = minHs + "px"; }
+    }
+    function onUp() {
+      grip.removeEventListener("pointermove", onMove);
+      grip.removeEventListener("pointerup", onUp);
+      el?.classList.remove("resizing");
+      be?.classList.remove("reordering");
+      if (gh) gh.style.display = "none";
+      if (el) { el.style.width = cur.w + "px"; el.style.height = cur.h + "px"; }
+      setBentoRects((prev) => ({ ...prev, [id]: cur }));
+    }
+    grip.addEventListener("pointermove", onMove);
+    grip.addEventListener("pointerup", onUp);
+  }
+
+  // ── bento: reset to grid defaults ──
+  function resetBento() {
+    const be = bentoRef.current;
+    if (!be) return;
+    // temporarily remove canvas to get grid layout
+    be.classList.remove("canvas");
+    Object.values(panelRefs.current).forEach((el) => {
+      if (!el) return;
+      el.style.left = el.style.top = el.style.width = el.style.height = el.style.zIndex = "";
+    });
+    be.style.height = "";
+    void be.offsetHeight; // force reflow
+    const bRect = be.getBoundingClientRect();
+    const bs = getComputedStyle(be);
+    const ox = bRect.left + parseFloat(bs.paddingLeft || "0") + parseFloat(bs.borderLeftWidth || "0");
+    const oy = bRect.top + parseFloat(bs.paddingTop || "0") + parseFloat(bs.borderTopWidth || "0");
+    const s = (v: number) => Math.round(v / bentoCell) * bentoCell;
+    const rects: Record<string, PanelRect> = {};
+    Object.entries(panelRefs.current).forEach(([pid, el]) => {
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      rects[pid] = { x: s(r.left - ox), y: s(r.top - oy), w: s(r.width), h: Math.max(80, s(r.height)) };
+    });
+    be.classList.add("canvas");
+    setBentoRects(rects);
+    // apply immediately
+    Object.entries(rects).forEach(([pid, r]) => {
+      const el = panelRefs.current[pid];
+      if (el) { el.style.left = r.x + "px"; el.style.top = r.y + "px"; el.style.width = r.w + "px"; el.style.height = r.h + "px"; }
+    });
+    setBentoPopOpen(false);
+  }
+
+  // ── bento: auto-pack ──
+  function packBento() {
+    const be = bentoRef.current;
+    if (!be) return;
+    const W = be.clientWidth;
+    const gap = bentoCell;
+    const order = Object.keys(bentoRects).sort((a, b) => {
+      const ra = bentoRects[a], rb = bentoRects[b];
+      return (ra.y - rb.y) || (ra.x - rb.x);
+    });
+    const s = (v: number) => bentoSnap ? Math.round(v / gap) * gap : Math.round(v);
+    let x = 0, y = 0, shelfH = 0;
+    const newRects = { ...bentoRects };
+    order.forEach((pid) => {
+      const r = bentoRects[pid];
+      if (!r) return;
+      if (x + r.w > W && x > 0) { x = 0; y += shelfH + gap; shelfH = 0; }
+      newRects[pid] = { x: s(x), y: s(y), w: r.w, h: r.h };
+      x += r.w + gap;
+      shelfH = Math.max(shelfH, r.h);
+    });
+    setBentoRects(newRects);
+    Object.entries(newRects).forEach(([pid, r]) => {
+      const el = panelRefs.current[pid];
+      if (el) { el.style.left = r.x + "px"; el.style.top = r.y + "px"; el.style.width = r.w + "px"; el.style.height = r.h + "px"; }
+    });
+    if (!bentoEdit) setBentoEdit(true);
+    setBentoPopOpen(false);
+  }
+
+  // ── bento: panel style helper ──
+  function pStyle(id: string, fallback: React.CSSProperties): React.CSSProperties {
+    if (bentoReady && bentoRects[id]) {
+      const r = bentoRects[id];
+      return { position: "absolute" as const, left: r.x, top: r.y, width: r.w, height: r.h };
+    }
+    return fallback;
+  }
+
+  // ── bento: resize grips helper (called as function, not JSX component) ──
+  const grips = (id: string) => (<>
+    <div className="rsz" onPointerDown={(e) => startResize(e, id, "se")} />
+    <div className="rgrip e" onPointerDown={(e) => startResize(e, id, "e")} />
+    <div className="rgrip s" onPointerDown={(e) => startResize(e, id, "s")} />
+  </>);
 
   return (
     <div className="cr">
@@ -2664,11 +2914,61 @@ function Index() {
         </div>
 
         <div className="right">
+          <div className="setwrap" onClick={(e) => e.stopPropagation()}>
+            <button
+              className={`btn sm${bentoEdit ? " on" : ""}`}
+              onClick={() => setBentoPopOpen((p) => !p)}
+              title="Layout dos painéis"
+            >
+              ⚙ Layout
+            </button>
+            <div className={`setpop${bentoPopOpen ? " open" : ""}`}>
+              <button
+                className={`edit-btn${bentoEdit ? " on" : ""}`}
+                onClick={() => setBentoEdit((v) => !v)}
+              >
+                {bentoEdit ? "✓ Sair do modo de edição" : "✎ Entrar no modo de edição"}
+              </button>
+              <div className="sdiv" />
+              <div className={`sgrp${!bentoEdit ? " smlocked" : ""}`}>
+                <div className="slab">Tamanho da grade · <b>{bentoCell}px</b></div>
+                <input
+                  type="range" min={8} max={48} step={2} value={bentoCell}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setBentoCell(v);
+                    document.documentElement.style.setProperty("--cell", v + "px");
+                  }}
+                />
+              </div>
+              <div className="sgrp">
+                <div className="slab">Encaixe na grade</div>
+                <div className="srow">
+                  <button className={bentoSnap ? "on" : ""} onClick={() => setBentoSnap((s) => !s)}>
+                    ⊞ Encaixar painéis
+                  </button>
+                </div>
+              </div>
+              <div className="sgrp">
+                <div className="slab">Layout dos painéis</div>
+                <div className="srow">
+                  <button onClick={packBento}>⇲ Organizar</button>
+                  <button onClick={resetBento}>↺ Padrão</button>
+                </div>
+              </div>
+              <div className="shint">
+                {bentoEdit
+                  ? "⠿ mover · borda ↔ largura · borda ↕ altura · canto ↘ ambos"
+                  : "Ative o modo de edição para mover e redimensionar os painéis."}
+              </div>
+            </div>
+          </div>
           <button
             className="btn sm"
             onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}
+            title="Configurações avançadas"
           >
-            ⚙ Configurações
+            ☰ Config
           </button>
           <button className="btn sm" onClick={() => setDiagOpen(true)}>
             🩺 Diagnóstico
@@ -2685,11 +2985,20 @@ function Index() {
       )}
 
       {/* ── bento grid ── */}
-      <div className="bento">
+      <div
+        ref={bentoRef}
+        className={`bento${bentoReady ? " canvas" : ""}${bentoEdit ? " editing" : ""}`}
+      >
 
-        {/* ════ Avatar & Session — cols 1-6, rows 1-2 ════ */}
-        <div className="panel" style={{ gridColumn: "1/7", gridRow: "1/3" }}>
+        {/* ════ Avatar & Session — cols 1-6, rows 1-3 ════ */}
+        <div
+          ref={(el) => { panelRefs.current["avatar"] = el; }}
+          data-pid="avatar"
+          className="panel"
+          style={pStyle("avatar", { gridColumn: "1/7", gridRow: "1/3" })}
+        >
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "avatar")}>⠿</div>
             <span className="ico">🎭</span>
             <span className="tt">Sessão <small>· HeyGen LiveAvatar</small></span>
             <div className="r">
@@ -2759,23 +3068,61 @@ function Index() {
           {/* session deck */}
           <div className="pb" style={{ flex: "0 0 auto" }}>
             <div className="sessiondeck">
+
+              {/* modo / comportamento */}
+              <div className="deckrow">
+                <label>Modo / comportamento</label>
+                <select className="inp" value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+                  {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </div>
+
+              {/* destino: Local | Google Meet */}
+              <div className="deckrow">
+                <label>Destino da sessão</label>
+                <div className="segm">
+                  <button className={!bentoDestMeet ? "on" : ""} onClick={() => setBentoDestMeet(false)}>
+                    <span className="dt" />Local (avatar)
+                  </button>
+                  <button className={bentoDestMeet ? "on" : ""} onClick={() => setBentoDestMeet(true)}>
+                    <span className="dt" />Google Meet
+                  </button>
+                </div>
+              </div>
+
+              {/* meet url — só quando destino = Meet */}
+              {bentoDestMeet && (
+                <div className="deckrow">
+                  <label>Link do Google Meet <span className="hint">recall</span></label>
+                  <input
+                    className="inp"
+                    type="url"
+                    value={settings.meetLink}
+                    onChange={(e) => updateSetting("meetLink", e.target.value)}
+                    placeholder="https://meet.google.com/…"
+                    spellCheck={false}
+                  />
+                </div>
+              )}
+
+              {/* connect row */}
               <div className="connectrow">
                 {!connected ? (
                   <button
                     className="btn primary"
-                    onClick={startSession}
-                    disabled={starting}
+                    onClick={bentoDestMeet ? () => void joinMeetingWithAvatar() : startSession}
+                    disabled={starting || (bentoDestMeet && botJoining)}
                     style={{ flex: 1, justifyContent: "center" }}
                   >
-                    {starting ? "⟳ Conectando..." : "⚡ Conectar avatar"}
+                    {starting || botJoining ? "⟳ Conectando..." : bentoDestMeet ? "🤖 Entrar no Meet" : "⚡ Conectar avatar"}
                   </button>
                 ) : (
                   <button
                     className="btn danger"
-                    onClick={stopSession}
+                    onClick={bentoDestMeet ? () => void leaveMeetingWithBot() : stopSession}
                     style={{ flex: 1, justifyContent: "center" }}
                   >
-                    ☎ Encerrar sessão
+                    {bentoDestMeet ? "🤖 Sair do Meet" : "☎ Encerrar sessão"}
                   </button>
                 )}
                 <button
@@ -2788,24 +3135,22 @@ function Index() {
                 </button>
               </div>
 
+              {/* dev actions */}
               <div className="devrow">
-                <button
-                  className="devbtn"
-                  onClick={interruptAvatar}
-                  disabled={!connected}
-                  title="Atalho: espaço"
-                >
-                  <span className="ic">⏹</span> Interromper
+                <button className={`devbtn${!connected ? " off" : ""}`} onClick={interruptAvatar} disabled={!connected} title="Atalho: espaço">
+                  <span className="ic">⏹</span><span>Interromper</span><span className="state">{connected ? "ON" : "OFF"}</span>
                 </button>
-                <button className="devbtn" onClick={testAvatar} disabled={!connected}>
-                  <span className="ic">🔊</span> Testar fala
+                <button className={`devbtn${!connected ? " off" : ""}`} onClick={testAvatar} disabled={!connected}>
+                  <span className="ic">🔊</span><span>Testar fala</span><span className="state">{connected ? "ON" : "OFF"}</span>
                 </button>
-                <button className="devbtn" onClick={testMicrophone} disabled={!speechSupported}>
+                <button className={`devbtn${!speechSupported ? " off" : ""}`} onClick={testMicrophone} disabled={!speechSupported}>
                   <span className="ic">🎤</span>
-                  {micTestRemaining > 0 ? ` Testando ${micTestRemaining}s…` : " Testar mic"}
+                  <span>{micTestRemaining > 0 ? `Testando ${micTestRemaining}s…` : "Testar mic"}</span>
+                  <span className="state">{speechSupported ? "ON" : "OFF"}</span>
                 </button>
               </div>
 
+              {/* barge-in */}
               <div className="swrow">
                 <span className="lab">
                   Barge-in
@@ -2819,48 +3164,56 @@ function Index() {
                 />
               </div>
 
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 500, color: "var(--ink-2)", marginBottom: 5 }}>
-                  Enviar por texto
-                </div>
+              {/* session meta */}
+              <div className="sessmeta">
+                <span className={`led ${connected ? "green" : starting ? "amber blink" : "red"}`} />
+                {connected ? (
+                  <>
+                    <b>ao vivo</b>
+                    {callStartTs && (
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)" }}>
+                        {" "}· ⏱{" "}
+                        {(() => {
+                          const sec = Math.max(0, (nowTs - callStartTs) / 1000);
+                          return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+                        })()}
+                      </span>
+                    )}
+                    {botStatus && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)" }}> · bot: {botStatus}</span>}
+                  </>
+                ) : starting ? <b>conectando…</b> : <b>desconectado</b>}
+              </div>
+
+              {/* send message */}
+              <div className="deckrow">
+                <label>Enviar mensagem ao avatar</label>
                 <div className="composer">
                   <input
                     className="inp"
                     value={text}
                     onChange={(e) => { setText(e.target.value); setLiveTranscript(e.target.value); }}
                     onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-                    placeholder="Digite uma mensagem…"
+                    placeholder="Digite e pressione Enviar…"
                   />
                   <button
                     className="btn primary sm"
                     onClick={() => void handleSend()}
                     disabled={!connected || !text.trim()}
                   >
-                    Enviar
+                    ✉ Enviar
                   </button>
                 </div>
               </div>
 
-              {callStartTs && (
-                <div className="sessmeta">
-                  ⏱ sessão:{" "}
-                  <b>
-                    {(() => {
-                      const sec = Math.max(0, (nowTs - callStartTs) / 1000);
-                      return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(
-                        Math.floor(sec % 60),
-                      ).padStart(2, "0")}`;
-                    })()}
-                  </b>
-                </div>
-              )}
             </div>
           </div>
+          {grips("avatar")}
         </div>
 
         {/* ════ Status ao vivo — cols 7-10, row 1 ════ */}
-        <div className="panel" style={{ gridColumn: "7/11", gridRow: 1 }}>
+        <div ref={(el) => { panelRefs.current["status"] = el; }} data-pid="status" className="panel" style={pStyle("status", { gridColumn: "7/11", gridRow: 1 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "status")}>⠿</div>
             <span className="ico">📡</span>
             <span className="tt">Status <small>· ao vivo</small></span>
           </div>
@@ -2980,24 +3333,15 @@ function Index() {
               </div>
             </div>
           </div>
+          {grips("status")}
         </div>
 
         {/* ════ Config readiness — cols 11-13, row 1 ════ */}
-        <div className="panel" style={{ gridColumn: "11/13", gridRow: 1 }}>
+        <div ref={(el) => { panelRefs.current["ready"] = el; }} data-pid="ready" className="panel" style={pStyle("ready", { gridColumn: "11/13", gridRow: 1 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "ready")}>⠿</div>
             <span className="ico">✅</span>
-            <span className="tt">Config</span>
-            <div className="r">
-              <button
-                className="btn sm"
-                onClick={() => {
-                  setSettingsDraft(settings);
-                  setSettingsOpen(true);
-                }}
-              >
-                Editar
-              </button>
-            </div>
+            <span className="tt">Config <small>· prontidão</small></span>
           </div>
           <div className="pb">
             {(() => {
@@ -3046,11 +3390,13 @@ function Index() {
               );
             })()}
           </div>
+          {grips("ready")}
         </div>
 
         {/* ════ Hot-swap countdown — cols 7-10, row 2 ════ */}
-        <div className="panel" style={{ gridColumn: "7/10", gridRow: 2 }}>
+        <div ref={(el) => { panelRefs.current["hotswap"] = el; }} data-pid="hotswap" className="panel" style={pStyle("hotswap", { gridColumn: "7/10", gridRow: 2 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "hotswap")}>⠿</div>
             <span className="ico">🔄</span>
             <span className="tt">Hot-swap <small>· sessão HeyGen</small></span>
           </div>
@@ -3059,131 +3405,64 @@ function Index() {
               const swapTotal = settings.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT;
               const swapLeft =
                 connected && sessionStartedAtRef.current
-                  ? Math.max(
-                      0,
-                      swapTotal -
-                        Math.floor((nowTs - sessionStartedAtRef.current) / 1000),
-                    )
+                  ? Math.max(0, swapTotal - Math.floor((nowTs - sessionStartedAtRef.current) / 1000))
                   : null;
               const pct = swapLeft !== null ? (swapLeft / swapTotal) * 100 : 100;
               const R = 40;
               const circ = 2 * Math.PI * R;
               const dash = (pct / 100) * circ;
-              const strokeColor =
-                swapLeft !== null && swapLeft < 30 ? "var(--red)" : "var(--accent)";
+              const strokeColor = swapLeft !== null && swapLeft < 30 ? "var(--red)" : "var(--accent)";
               return (
                 <div className="hotswap">
                   <div className="ring">
                     <svg width="96" height="96" viewBox="0 0 96 96">
-                      <circle
-                        cx="48" cy="48" r={R}
-                        fill="none" stroke="var(--border-2)" strokeWidth="5"
-                      />
-                      <circle
-                        cx="48" cy="48" r={R}
-                        fill="none" stroke={strokeColor} strokeWidth="5"
-                        strokeDasharray={`${dash} ${circ}`}
-                        strokeLinecap="round"
-                        transform="rotate(-90 48 48)"
-                      />
-                      <text
-                        x="48" y="44" textAnchor="middle" dominantBaseline="middle"
-                        style={{
-                          fontFamily: "var(--mono)", fontSize: 15,
-                          fontWeight: 600, fill: "var(--ink)",
-                        }}
-                      >
+                      <circle cx="48" cy="48" r={R} fill="none" stroke="var(--border-2)" strokeWidth="5" />
+                      <circle cx="48" cy="48" r={R} fill="none" stroke={strokeColor} strokeWidth="5"
+                        strokeDasharray={`${dash} ${circ}`} strokeLinecap="round" transform="rotate(-90 48 48)" />
+                      <text x="48" y="44" textAnchor="middle" dominantBaseline="middle"
+                        style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 600, fill: "var(--ink)" }}>
                         {swapLeft !== null ? `${swapLeft}s` : "—"}
                       </text>
-                      <text
-                        x="48" y="61" textAnchor="middle"
-                        style={{ fontFamily: "var(--mono)", fontSize: 9, fill: "var(--ink-3)" }}
-                      >
+                      <text x="48" y="61" textAnchor="middle"
+                        style={{ fontFamily: "var(--mono)", fontSize: 9, fill: "var(--ink-3)" }}>
                         /{swapTotal}s
                       </text>
                     </svg>
                   </div>
                   <div className="meta">
-                    <div className="big">
-                      {swapLeft !== null ? `T-${swapLeft}s` : "inativo"}
-                    </div>
-                    <div className="sub">
-                      Renova a cada <b>{swapTotal}s</b>
-                      <br />
-                      Dribla o limite de 5min do plano HeyGen
-                    </div>
+                    <div className="big">{swapLeft !== null ? `T-${swapLeft}s` : "inativo"}</div>
+                    <div className="sub">Renova a cada <b>{swapTotal}s</b><br />Dribla o limite de 5min do plano HeyGen</div>
                   </div>
                 </div>
               );
             })()}
           </div>
+          {grips("hotswap")}
         </div>
 
         {/* ════ STT / Voice diagnostics — cols 10-13, row 2 ════ */}
-        <div className="panel" style={{ gridColumn: "10/13", gridRow: 2 }}>
+        <div ref={(el) => { panelRefs.current["voice"] = el; }} data-pid="voice" className="panel" style={pStyle("voice", { gridColumn: "10/13", gridRow: 2 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "voice")}>⠿</div>
             <span className="ico">🎙</span>
-            <span className="tt">
-              STT <small>· {settings.sttEngine}</small>
-            </span>
+            <span className="tt">STT <small>· {settings.sttEngine}</small></span>
           </div>
           <div className="pb">
             <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
-              <button
-                className={`btn sm${settings.sttEngine === "webspeech" ? " primary" : ""}`}
-                onClick={() => setSttEngine("webspeech")}
-              >
-                Web Speech
-              </button>
-              <button
-                className={`btn sm${settings.sttEngine === "deepgram" ? " primary" : ""}`}
-                onClick={() => setSttEngine("deepgram")}
-              >
-                Deepgram
-              </button>
+              <button className={`btn sm${settings.sttEngine === "webspeech" ? " primary" : ""}`} onClick={() => setSttEngine("webspeech")}>Web Speech</button>
+              <button className={`btn sm${settings.sttEngine === "deepgram" ? " primary" : ""}`} onClick={() => setSttEngine("deepgram")}>Deepgram</button>
             </div>
             <div className="statlist" style={{ marginBottom: 10 }}>
-              {(
-                [
-                  {
-                    nm: "estado",
-                    led: muted ? "off" : micLastError ? "red" : listening ? "green" : "amber",
-                    vl: micState,
-                    cls: "",
-                  },
-                  {
-                    nm: "interim",
-                    led: micLastInterim ? "amber" : "off",
-                    vl: micLastInterim || "—",
-                    cls: "",
-                  },
-                  {
-                    nm: "último FINAL",
-                    led: micLastFinal ? "green" : "off",
-                    vl: micLastFinal || "—",
-                    cls: "",
-                  },
-                  {
-                    nm: "último erro",
-                    led: micLastError ? "red" : "off",
-                    vl: micLastError || "—",
-                    cls: micLastError ? "err" : "",
-                  },
-                ] as { nm: string; led: string; vl: string; cls: string }[]
-              ).map((row) => (
+              {([
+                { nm: "estado", led: muted ? "off" : micLastError ? "red" : listening ? "green" : "amber", vl: micState, cls: "" },
+                { nm: "interim", led: micLastInterim ? "amber" : "off", vl: micLastInterim || "—", cls: "" },
+                { nm: "último FINAL", led: micLastFinal ? "green" : "off", vl: micLastFinal || "—", cls: "" },
+                { nm: "último erro", led: micLastError ? "red" : "off", vl: micLastError || "—", cls: micLastError ? "err" : "" },
+              ] as { nm: string; led: string; vl: string; cls: string }[]).map((row) => (
                 <div className="statrow" key={row.nm}>
                   <span className={`led ${row.led}`} />
                   <span className="nm">{row.nm}</span>
-                  <span
-                    className={`vl ${row.cls}`}
-                    style={{
-                      maxWidth: 100,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {row.vl}
-                  </span>
+                  <span className={`vl ${row.cls}`} style={{ maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis" }}>{row.vl}</span>
                 </div>
               ))}
             </div>
@@ -3198,66 +3477,32 @@ function Index() {
             {mode === "entrevistador" && !muted && interviewerWaiting && (
               <div className="cfgstatus">
                 <span className="led green blink" />
-                Ouvindo…{" "}
-                {settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de
-                silêncio para enviar
+                Ouvindo… {settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de silêncio para enviar
               </div>
             )}
           </div>
+          {grips("voice")}
         </div>
 
         {/* ════ Log verboso — cols 1-6, rows 3-4 ════ */}
-        <div
-          className="panel"
-          style={{ gridColumn: "1/7", gridRow: "3/5", minHeight: 340 }}
-        >
+        <div ref={(el) => { panelRefs.current["log"] = el; }} data-pid="log" className="panel" style={pStyle("log", { gridColumn: "1/7", gridRow: "3/5", minHeight: 340 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "log")}>⠿</div>
             <span className="ico">›_</span>
-            <span className="tt">
-              Log verboso <small>· fluxo principal</small>
-            </span>
-            <div className="r">
-              <span className="badge">{logs.length} lin</span>
-            </div>
+            <span className="tt">Log verboso <small>· fluxo principal</small></span>
+            <div className="r"><span className="badge">{logs.length} lin</span></div>
           </div>
-          <div
-            className="pb flush"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              minHeight: 0,
-              flex: "1 1 auto",
-            }}
-          >
+          <div className="pb flush" style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: "1 1 auto" }}>
             <div className="logtools">
-              <span
-                style={{
-                  fontFamily: "var(--mono)",
-                  fontSize: 11,
-                  color: "var(--ink-3)",
-                }}
-              >
-                ao vivo · DEBUG
-              </span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>ao vivo · DEBUG</span>
             </div>
             <div className="logfeed" style={{ flex: "1 1 0", minHeight: 220 }}>
               {logs.length === 0 ? (
-                <div className="logline debug">
-                  <span className="ts">—</span>
-                  <span className="lv">DEBUG</span>
-                  <span className="msg">sem eventos ainda…</span>
-                </div>
+                <div className="logline debug"><span className="ts">—</span><span className="lv">DEBUG</span><span className="msg">sem eventos ainda…</span></div>
               ) : (
                 logs.slice(-300).map((entry, i) => {
-                  const ts = new Date(entry.t).toLocaleTimeString("pt-BR", {
-                    hour12: false,
-                  });
-                  const lv =
-                    entry.kind === "err"
-                      ? "err"
-                      : entry.kind === "ok"
-                        ? "info"
-                        : "debug";
+                  const ts = new Date(entry.t).toLocaleTimeString("pt-BR", { hour12: false });
+                  const lv = entry.kind === "err" ? "err" : entry.kind === "ok" ? "info" : "debug";
                   return (
                     <div key={`${entry.t}-${i}`} className={`logline ${lv}`}>
                       <span className="ts">{ts}</span>
@@ -3269,192 +3514,229 @@ function Index() {
               )}
               <div ref={logEndRef} />
             </div>
-            <div className="logfoot">
-              linhas <b>{logs.length}</b> · nível <b>DEBUG</b>
-            </div>
+            <div className="logfoot">linhas <b>{logs.length}</b> · nível <b>DEBUG</b></div>
           </div>
+          {grips("log")}
         </div>
 
         {/* ════ Modos & Comportamento — cols 7-13, rows 3-4 ════ */}
-        <div
-          className="panel"
-          style={{ gridColumn: "7/13", gridRow: "3/5", minHeight: 340 }}
-        >
+        <div ref={(el) => { panelRefs.current["modos"] = el; }} data-pid="modos" className="panel" style={pStyle("modos", { gridColumn: "7/13", gridRow: "3/5", minHeight: 340 })}>
           <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "modos")}>⠿</div>
             <span className="ico">🎛</span>
-            <span className="tt">
-              Modos <small>· comportamento</small>
-            </span>
+            <span className="tt">Modos <small>· comportamento</small></span>
+            <div className="r"><span className="badge">{MODES.find((m) => m.id === mode)?.label ?? mode}</span></div>
+          </div>
+          <div className="pb">
+            <div className="cfgnote">Cada modo tem sua saudação e comportamento. A fala inicial vale na tela e dentro do Google Meet.</div>
+            <div className="modegrid">
+              {([
+                { id: "conversa" as Mode, name: "Conversa", tag: "sempre ativo", tagCls: "" },
+                { id: "reuniao" as Mode, name: "Reunião", tag: "wake word", tagCls: "blue" },
+                { id: "entrevistador" as Mode, name: "Entrevistador", tag: "sempre ativo", tagCls: "" },
+              ]).map((m) => {
+                const cfg = settings.meetConfigs[m.id] ?? { reconnectGreeting: "", behavior: "always" as const, bargeIn: false };
+                return (
+                  <div key={m.id} className={`modecard${mode === m.id ? " active" : ""}`} onClick={() => setMode(m.id)}>
+                    <div className="mh"><b>{m.name}</b><span className={`modetag${mode === m.id ? " active" : m.tagCls ? " " + m.tagCls : ""}`}>{m.tag}</span></div>
+                    <div>
+                      <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala inicial (ao conectar)</label>
+                      <textarea className="inp" rows={2} spellCheck={false}
+                        value={cfg.reconnectGreeting}
+                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], reconnectGreeting: e.target.value } } }))}
+                        placeholder="Fala ao conectar…"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Comportamento</label>
+                      <select className="inp" value={cfg.behavior}
+                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], behavior: e.target.value as "always" | "wake" } } }))}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="always">Sempre ativo (responde tudo)</option>
+                        <option value="wake">Só quando chamado (wake word)</option>
+                      </select>
+                    </div>
+                    <div className="switch" onClick={(e) => e.stopPropagation()}>
+                      <div className="lab">Barge-in<small>interromper falando por cima</small></div>
+                      <div className={`sw${cfg.bargeIn ? " on" : ""}`}
+                        onClick={() => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], bargeIn: !cfg.bargeIn } } }))}
+                        role="switch" aria-checked={cfg.bargeIn}
+                      />
+                    </div>
+                    {m.id === "entrevistador" && (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Tolerância de silêncio (s)</label>
+                        <input className="inp" type="number" min={0.5} max={10} step={0.5}
+                          value={settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}
+                          onChange={(e) => updateSetting("entrevistadorSilenceSec", parseFloat(e.target.value) || ENTREVISTADOR_SILENCE_SEC_DEFAULT)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="divider" />
+            <div className="subhd">Reconexão automática (hot-swap)</div>
+            <div className="fields">
+              <div className="field">
+                <label>Reconectar a cada <span className="hint">segundos</span></label>
+                <input className="inp" type="number" min={60} max={290} step={10}
+                  value={settings.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT}
+                  onChange={(e) => updateSetting("hotSwapAfterSec", parseInt(e.target.value) || HOT_SWAP_AFTER_SEC_DEFAULT)}
+                />
+              </div>
+              <div className="field">
+                <div className="cfgnote" style={{ margin: 0, marginTop: 6 }}>Renova antes do limite de 5 min do HeyGen. <b>270s</b> em produção.</div>
+              </div>
+            </div>
+
+            <div className="divider" />
+            <div className="subhd">Geral — dentro do Google Meet (Camada 3)</div>
+            <div className="fields">
+              <div className="field">
+                <label>Pausa antes de enviar <span className="hint">segundos</span></label>
+                <input className="inp" type="number" min={0} max={5} step={0.5}
+                  value={settings.meetSilenceSec ?? 0.5}
+                  onChange={(e) => updateSetting("meetSilenceSec", parseFloat(e.target.value) || 0.5)}
+                />
+              </div>
+              <div className="field" style={{ gridColumn: "1 / -1" }}>
+                <div className="switch">
+                  <div className="lab">Modo diagnóstico no Meet<small>mostra status na câmera do bot</small></div>
+                  <div className={`sw${settings.meetDebug ? " on" : ""}`}
+                    onClick={() => updateSetting("meetDebug", !settings.meetDebug)}
+                    role="switch" aria-checked={settings.meetDebug}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          {grips("modos")}
+        </div>
+
+        {/* ════ Avatar & Voz — config inline — row 5 ════ */}
+        <div ref={(el) => { panelRefs.current["avatarvoz"] = el; }} data-pid="avatarvoz" className="panel" style={pStyle("avatarvoz", { gridColumn: "1/5", gridRow: 5 })}>
+          <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "avatarvoz")}>⠿</div>
+            <span className="led red blink" />
+            <span className="ico">🎭</span>
+            <span className="tt">Avatar & Voz <small>· HeyGen LiveAvatar</small></span>
+            <div className="r"><span className={`badge${!settings.apiKey ? " err" : ""}`}>{settings.apiKey ? "API OK" : "API KEY"}</span></div>
+          </div>
+          <div className="pb">
+            <div className="cfgnote">Credenciais e identificadores. Campos com * são obrigatórios para conectar.</div>
+            <div className="fields">
+              <div className={`field wide req${!settings.apiKey ? " err" : ""}`}>
+                <label>Chave da API HeyGen <span className="hint">api_key</span></label>
+                <input className="inp pass" type="password" value={settings.apiKey}
+                  onChange={(e) => updateSetting("apiKey", e.target.value)} spellCheck={false} placeholder="hk-…" />
+                {!settings.apiKey && <div className="reqmsg">Obrigatório</div>}
+              </div>
+              <div className={`field wide req${!settings.avatarId ? " err" : ""}`}>
+                <label>ID do Avatar <span className="hint">avatar_id</span></label>
+                <input className="inp" value={settings.avatarId}
+                  onChange={(e) => updateSetting("avatarId", e.target.value)} spellCheck={false} />
+              </div>
+              <div className={`field wide req${!settings.voiceId ? " err" : ""}`}>
+                <label>ID da Voz <span className="hint">voice_id</span></label>
+                <input className="inp" value={settings.voiceId}
+                  onChange={(e) => updateSetting("voiceId", e.target.value)} spellCheck={false} />
+              </div>
+              <div className={`field wide req${!settings.contextId ? " err" : ""}`}>
+                <label>ID do Contexto / Persona <span className="hint">context_id</span></label>
+                <input className="inp" value={settings.contextId}
+                  onChange={(e) => updateSetting("contextId", e.target.value)} spellCheck={false} />
+              </div>
+              <div className={`field req${!settings.language ? " err" : ""}`}>
+                <label>Idioma <span className="hint">ex: pt</span></label>
+                <input className="inp" value={settings.language}
+                  onChange={(e) => updateSetting("language", e.target.value)} spellCheck={false} placeholder="pt" />
+              </div>
+              <div className="field">
+                <label>Poster do avatar <span className="hint">url</span></label>
+                <input className="inp" value={settings.posterUrl}
+                  onChange={(e) => updateSetting("posterUrl", e.target.value)} spellCheck={false} placeholder="https://…/preview.png" />
+              </div>
+            </div>
+          </div>
+          {grips("avatarvoz")}
+        </div>
+
+        {/* ════ Webhooks n8n — config inline — row 5 ════ */}
+        <div ref={(el) => { panelRefs.current["webhooks"] = el; }} data-pid="webhooks" className="panel" style={pStyle("webhooks", { gridColumn: "5/9", gridRow: 5 })}>
+          <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "webhooks")}>⠿</div>
+            <span className="ico">🔗</span>
+            <span className="tt">Webhooks <small>· n8n</small></span>
             <div className="r">
-              <span className="badge">
-                {MODES.find((m) => m.id === mode)?.label ?? mode}
-              </span>
+              {(() => {
+                const ok = [settings.webhookConversa, settings.webhookReuniao, settings.webhookEntrevistador, settings.webhookFiller].filter(Boolean).length;
+                return <span className={`badge${ok < 4 ? " err" : ""}`}>{ok}/4</span>;
+              })()}
             </div>
           </div>
           <div className="pb">
-            <div className="modegrid">
-              {(
-                [
-                  {
-                    id: "conversa" as Mode,
-                    name: "Conversa",
-                    tag: "sempre ativo",
-                    tagCls: "",
-                    desc: "Responde tudo o que for dito. Ideal para demos presenciais e interações abertas.",
-                  },
-                  {
-                    id: "reuniao" as Mode,
-                    name: "Reunião",
-                    tag: "wake word",
-                    tagCls: "blue",
-                    desc: 'Fica em silêncio até ser chamado pelo nome ("Renante"). Ideal para reuniões com vários participantes.',
-                  },
-                  {
-                    id: "entrevistador" as Mode,
-                    name: "Entrevistador",
-                    tag: "sempre ativo",
-                    tagCls: "",
-                    desc: `Acumula a fala e aguarda ${settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de silêncio antes de responder.`,
-                  },
-                ] as {
-                  id: Mode;
-                  name: string;
-                  tag: string;
-                  tagCls: string;
-                  desc: string;
-                }[]
-              ).map((m) => (
-                <div
-                  key={m.id}
-                  className={`modecard${mode === m.id ? " active" : ""}`}
-                  onClick={() => setMode(m.id)}
-                >
-                  <div className="mh">
-                    <b>{m.name}</b>
-                    <span
-                      className={`modetag${
-                        mode === m.id ? " active" : m.tagCls ? " " + m.tagCls : ""
-                      }`}
-                    >
-                      {m.tag}
-                    </span>
-                  </div>
-                  <div className="modeinfo">{m.desc}</div>
-                  {mode === m.id && (
-                    <>
-                      <label>Fala inicial</label>
-                      <textarea
-                        className="inp"
-                        style={{
-                          minHeight: 52,
-                          fontFamily: "var(--sans)",
-                          fontSize: 11.5,
-                          resize: "vertical",
-                        }}
-                        value={settings.meetConfigs[m.id]?.reconnectGreeting ?? ""}
-                        onChange={(e) =>
-                          setSettings((s) => ({
-                            ...s,
-                            meetConfigs: {
-                              ...s.meetConfigs,
-                              [m.id]: {
-                                ...s.meetConfigs[m.id],
-                                reconnectGreeting: e.target.value,
-                              },
-                            },
-                          }))
-                        }
-                        placeholder="Fala de saudação ao conectar…"
-                      />
-                    </>
-                  )}
+            <div className="cfgnote">Endpoints do n8n para cada modo. Todos são obrigatórios.</div>
+            <div className="fields">
+              {([
+                { key: "webhookConversa" as keyof Settings, label: "Webhook Conversa" },
+                { key: "webhookReuniao" as keyof Settings, label: "Webhook Reunião" },
+                { key: "webhookEntrevistador" as keyof Settings, label: "Webhook Entrevistador" },
+                { key: "webhookFiller" as keyof Settings, label: "Webhook Filler" },
+              ]).map(({ key, label }) => (
+                <div key={String(key)} className={`field wide req${!settings[key] ? " err" : ""}`}>
+                  <label>{label}</label>
+                  <input className="inp url" type="url" value={settings[key] as string}
+                    onChange={(e) => updateSetting(key, e.target.value)} spellCheck={false} placeholder="https://n8n.…/webhook/…" />
+                  {!settings[key] && <div className="reqmsg">Obrigatório</div>}
                 </div>
               ))}
             </div>
-
-            {/* Google Meet (Camada 3) */}
-            <div
-              style={{
-                marginTop: 14,
-                paddingTop: 14,
-                borderTop: "1px solid var(--border)",
-                display: "flex",
-                gap: 14,
-                flexWrap: "wrap",
-                alignItems: "flex-start",
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <div className="subhd">Google Meet · Camada 3</div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  {settings.meetLink ? (
-                    <>
-                      <span
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          color: "var(--ink-2)",
-                        }}
-                      >
-                        {settings.meetLink.length > 45
-                          ? settings.meetLink.slice(0, 45) + "…"
-                          : settings.meetLink}
-                      </span>
-                      {!botId ? (
-                        <button
-                          className="btn primary sm"
-                          onClick={() => void joinMeetingWithAvatar()}
-                          disabled={botJoining || !connected}
-                        >
-                          {botJoining ? "Entrando…" : "Entrar na reunião"}
-                        </button>
-                      ) : (
-                        <button
-                          className="btn danger sm"
-                          onClick={() => void leaveMeetingWithBot()}
-                        >
-                          Sair da reunião
-                        </button>
-                      )}
-                      {botStatus && (
-                        <span
-                          style={{
-                            fontFamily: "var(--mono)",
-                            fontSize: 10,
-                            color: "var(--ink-3)",
-                          }}
-                        >
-                          bot: {botStatus}
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                      Configure o link do Google Meet nas Configurações → Meet.
-                    </span>
-                  )}
-                </div>
-              </div>
-              <button
-                className="btn sm"
-                onClick={() => {
-                  setSettingsDraft(settings);
-                  setSettingsOpen(true);
-                  setSettingsTab("meet");
-                }}
-              >
-                ⚙ Config Meet
-              </button>
-            </div>
           </div>
+          {grips("webhooks")}
         </div>
+
+        {/* ════ Recall — config inline — row 5 ════ */}
+        <div ref={(el) => { panelRefs.current["recall"] = el; }} data-pid="recall" className="panel" style={pStyle("recall", { gridColumn: "9/13", gridRow: 5 })}>
+          <div className="ph">
+            <div className="drag" onPointerDown={(e) => startMove(e, "recall")}>⠿</div>
+            <span className="ico">🤖</span>
+            <span className="tt">Recall <small>· Camada 3 · opcional</small></span>
+            <div className="r"><span className="badge">OPCIONAL</span></div>
+          </div>
+          <div className="pb">
+            <div className="cfgnote">Bot do Recall renderiza /meet e transmite o avatar para dentro do Google Meet.</div>
+            <div className="fields">
+              <div className="field wide">
+                <label>Recall API Key</label>
+                <input className="inp pass" type="password" value={settings.recallApiKey}
+                  onChange={(e) => updateSetting("recallApiKey", e.target.value)} spellCheck={false} placeholder="key_…" />
+              </div>
+              <div className="field wide">
+                <label>URL pública do avatar <span className="hint">base</span></label>
+                <input className="inp url" value={settings.avatarBaseUrl}
+                  onChange={(e) => updateSetting("avatarBaseUrl", e.target.value)} spellCheck={false} placeholder="https://seu-app.vercel.app" />
+              </div>
+            </div>
+            <div className="cfgstatus">
+              <span className={`led ${botId ? "green" : botJoining ? "amber blink" : "off"}`} />
+              {botId ? `bot ativo · ${botStatus || "em reunião"}` : botJoining ? "entrando na reunião…" : "bot ocioso · nenhuma reunião ativa"}
+            </div>
+            {settings.avatarBaseUrl && (
+              <div className="footerbtns">
+                <button className="btn sm" onClick={() => window.open(settings.avatarBaseUrl + "/meet", "_blank")}>🔍 Testar página do avatar</button>
+              </div>
+            )}
+          </div>
+          {grips("recall")}
+        </div>
+
+        {/* snap ghost */}
+        <div className="snapghost" ref={ghostRef} />
 
       </div>
       {/* /bento */}

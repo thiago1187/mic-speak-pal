@@ -498,6 +498,124 @@
   padding: 10px 14px; font-size: 12.5px; color: var(--red); line-height: 1.5; margin: 0 16px;
 }
 
+/* ── free-form bento canvas ── */
+.cr .bento.canvas { position: relative; overflow: visible; min-height: 600px; }
+.cr .bento.canvas .panel { position: absolute; box-sizing: border-box; overflow: hidden; }
+.cr .bento.canvas.editing {
+  background-color: var(--panel-2);
+  background-image: radial-gradient(circle, var(--border-2) 1px, transparent 1px);
+  background-size: var(--cell, 20px) var(--cell, 20px);
+}
+.cr .bento.canvas.reordering { user-select: none; }
+@keyframes cr-placing { from { opacity: .7; } to { opacity: 1; } }
+.cr .panel.placing { animation: cr-placing .22s ease-out; }
+
+/* ── drag grip ── */
+.cr .panel .ph .drag {
+  width: 15px; flex-shrink: 0; cursor: grab; color: var(--ink-3); font-size: 15px;
+  display: none; align-items: center; justify-content: center; touch-action: none; user-select: none;
+}
+.cr .bento.canvas.editing .panel .ph .drag { display: flex; }
+.cr .panel.dragging { opacity: .92; outline: 2px solid var(--accent); }
+
+/* ── resize grips ── */
+.cr .panel > .rsz, .cr .panel > .rgrip { display: none; position: absolute; z-index: 2; touch-action: none; }
+.cr .bento.canvas.editing .panel > .rsz,
+.cr .bento.canvas.editing .panel > .rgrip { display: block; }
+.cr .panel > .rsz { right: 1px; bottom: 1px; width: 20px; height: 20px; cursor: nwse-resize; }
+.cr .panel > .rsz::after {
+  content: ""; position: absolute; right: 3px; bottom: 3px;
+  width: 7px; height: 7px; border-right: 2px solid var(--border-2); border-bottom: 2px solid var(--border-2); border-radius: 1px;
+}
+.cr .panel > .rgrip.e { top: 10px; bottom: 14px; right: -3px; width: 7px; cursor: ew-resize; }
+.cr .panel > .rgrip.s { left: 10px; right: 14px; bottom: -3px; height: 7px; cursor: ns-resize; }
+.cr .panel.resizing { outline: 2px solid var(--accent); }
+
+/* ── snap ghost ── */
+.cr .snapghost {
+  display: none; position: absolute; border: 1.5px dashed var(--accent);
+  background: rgba(207,122,31,.07); border-radius: 6px; pointer-events: none; z-index: 99; box-sizing: border-box;
+}
+
+/* ── layout settings popover ── */
+.cr .setwrap { position: relative; }
+.cr .setpop {
+  display: none; position: absolute; top: calc(100% + 6px); right: 0; min-width: 240px;
+  background: var(--panel); border: 1px solid var(--border-2); border-radius: 10px;
+  padding: 8px; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,.12);
+}
+.cr .setpop.open { display: block; }
+.cr .setpop .edit-btn {
+  width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; cursor: pointer; font-family: var(--sans); font-size: 12px; color: var(--ink);
+}
+.cr .setpop .edit-btn.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.cr .setpop .sdiv { height: 1px; background: var(--border); margin: 7px 0; }
+.cr .setpop .sgrp { margin: 5px 0; }
+.cr .setpop .sgrp.smlocked { opacity: .4; pointer-events: none; }
+.cr .setpop .slab { font-size: 11px; color: var(--ink-3); margin-bottom: 4px; font-family: var(--mono); }
+.cr .setpop .slab b { color: var(--ink-2); }
+.cr .setpop input[type=range] { width: 100%; accent-color: var(--accent); }
+.cr .setpop .srow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.cr .setpop .srow button {
+  font-size: 11px; padding: 4px 8px; border: 1px solid var(--border-2);
+  background: var(--panel-2); border-radius: 5px; cursor: pointer; font-family: var(--sans); color: var(--ink);
+}
+.cr .setpop .srow button:hover { background: var(--panel); }
+.cr .setpop .srow button.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-ink); }
+.cr .setpop .shint {
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+  margin-top: 7px; border-top: 1px solid var(--border); padding-top: 6px; line-height: 1.5;
+}
+
+/* ── inline config fields ── */
+.cr .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cr .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cr .field.wide { grid-column: 1 / -1; }
+.cr .field label { font-size: 10.5px; font-weight: 500; color: var(--ink-2); }
+.cr .field .hint { font-family: var(--mono); font-size: 9px; color: var(--ink-3); margin-left: 4px; }
+.cr .field.req label::after { content: " *"; color: var(--accent-ink); }
+.cr .field.err .inp { border-color: var(--red); }
+.cr .reqmsg { font-family: var(--mono); font-size: 9.5px; color: var(--red); }
+.cr .cfgnote { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; margin-bottom: 10px; }
+.cr .footerbtns { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+
+/* ── session deck ── */
+.cr .deckrow { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.cr .deckrow label { font-size: 10.5px; font-weight: 500; color: var(--ink-2); }
+.cr .segm { display: flex; border: 1px solid var(--border-2); border-radius: 6px; overflow: hidden; }
+.cr .segm button { flex: 1; padding: 7px 10px; font-size: 11.5px; font-family: var(--sans); border: none; background: var(--panel-2); color: var(--ink-2); cursor: pointer; border-radius: 0; }
+.cr .segm button.on { background: var(--accent); color: #fff; font-weight: 600; }
+.cr .segm .dt { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .6; margin-right: 5px; }
+
+/* ── devbtn states ── */
+.cr .devbtn .state { font-family: var(--mono); font-size: 8.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--green); }
+.cr .devbtn.off .state { color: var(--ink-3); }
+.cr .devbtn.off { opacity: .6; }
+
+/* ── switch / toggle ── */
+.cr .switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cr .switch .lab { font-size: 11.5px; color: var(--ink); flex: 1; }
+.cr .switch .lab small { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+
+/* ── divider ── */
+.cr .divider { height: 1px; background: var(--border); margin: 10px 0; }
+
+/* ── VU meter ── */
+.cr .vu { display: flex; align-items: flex-end; gap: 2px; height: 32px; padding: 2px 0; }
+.cr .vu i { display: block; width: 4px; min-height: 8%; background: var(--border-2); border-radius: 2px; transition: height .07s; flex-shrink: 0; }
+.cr .vu i.on { background: var(--accent); }
+.cr .vu i.hot { background: var(--red); }
+
+/* ── test / device rows ── */
+.cr .testrow { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.cr .devsel { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.cr .devsel select.inp { flex: 1; }
+.cr .camtest { display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); min-height: 40px; }
+.cr .cbadge { display: flex; align-items: center; gap: 5px; font-weight: 600; }
+.cr .cbadge .d { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border-2); }
+.cr .camtest.live .cbadge .d { background: var(--green); }
+
 /* ── responsive ── */
 @media (max-width: 1100px) {
   .cr .bento { grid-template-columns: repeat(6, 1fr); }
