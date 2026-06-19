@@ -2627,381 +2627,838 @@ function Index() {
 
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-8">
-        <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-3">
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <h1 className="flex items-center gap-2.5 text-xl font-semibold md:text-2xl">
-              <span className="relative flex h-4 w-4">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-90" />
-                <span className="relative inline-flex h-4 w-4 animate-pulse rounded-full bg-primary shadow-[0_0_10px_3px] shadow-primary/70" />
-              </span>
-              RenAnte Avatar AI
-              <span className="ml-1 flex items-center gap-1.5 text-sm font-bold text-pink-500">
-                by
-                <GZeroLogo variant="white" imgClassName="h-4 w-auto md:h-5" />
-              </span>
-            </h1>
-            <div className="flex items-center gap-3">
-              <div className="text-sm text-muted-foreground">WebRTC: {webrtcState}</div>
+    <div className="cr">
+
+      {/* ── devbar ── */}
+      <div className="devbar">
+        <span className="chip"><span className="dot" /> EM DESENVOLVIMENTO</span>
+        <span className="seg">modo <b>{MODES.find((m) => m.id === mode)?.label ?? mode}</b></span>
+        <span className="seg">stt <b>{settings.sttEngine}</b></span>
+        <span className="seg">hot-swap <b>{settings.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT}s</b></span>
+        <span className="grow" />
+        <span className="seg">heygen-sdk <b>2.x</b></span>
+        <span className="seg">env <b>browser</b></span>
+      </div>
+
+      {/* ── topbar ── */}
+      <div className="topbar">
+        <div className="brand">
+          <span className="mark">🎭</span>
+          <div>
+            <h1>RenAnte <b>Avatar</b> AI</h1>
+            <span className="by">console de diagnóstico · by GZero</span>
+          </div>
+        </div>
+
+        <span className="statuspill">
+          <span className={`led ${rtcToTone(webrtcState)}${rtcToTone(webrtcState) === "amber" ? " blink" : ""}`} />
+          WebRTC: {webrtcState}
+        </span>
+
+        <div className="seg-ctl">
+          {MODES.map((m) => (
+            <button key={m.id} className={mode === m.id ? "on" : ""} onClick={() => setMode(m.id)}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="right">
+          <button
+            className="btn sm"
+            onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}
+          >
+            ⚙ Configurações
+          </button>
+          <button className="btn sm" onClick={() => setDiagOpen(true)}>
+            🩺 Diagnóstico
+          </button>
+        </div>
+      </div>
+
+      {/* ── speech not supported notice ── */}
+      {!speechSupported && settings.sttEngine !== "deepgram" && (
+        <div className="notice">
+          Este navegador não tem reconhecimento de voz (Web Speech). Use Google Chrome no
+          computador — ou troque para <strong>Deepgram</strong> nas Configurações.
+        </div>
+      )}
+
+      {/* ── bento grid ── */}
+      <div className="bento">
+
+        {/* ════ Avatar & Session — cols 1-6, rows 1-2 ════ */}
+        <div className="panel" style={{ gridColumn: "1/7", gridRow: "1/3" }}>
+          <div className="ph">
+            <span className="ico">🎭</span>
+            <span className="tt">Sessão <small>· HeyGen LiveAvatar</small></span>
+            <div className="r">
+              {connected && <span className="badge ok">● ao vivo</span>}
+              {starting && <span className="badge">conectando…</span>}
+            </div>
+          </div>
+          {/* dark video tile */}
+          <div
+            className="avbox"
+            style={{ flex: "1 1 auto", minHeight: 200, borderRadius: 0, position: "relative" }}
+          >
+            <div className="grid-ov" />
+            {connected && <div className="scan" />}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted={false}
+              poster={settings.posterUrl || undefined}
+              style={{
+                position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+                width: "100%", height: "100%",
+                objectFit: "cover", display: connected ? "block" : "none",
+              }}
+            />
+            {!connected && (
+              <div className="scrn">
+                <div className="ce">🎭</div>
+                <div className="st">{starting ? "conectando…" : "avatar desconectado"}</div>
+                {starting && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span className="spin" />
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "#7c8694" }}>
+                      aguardando sessão…
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+            {connected && avatarSpeaking && (
+              <div className="rec">
+                <span
+                  style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    background: "var(--green)", boxShadow: "0 0 5px var(--green)", flexShrink: 0,
+                    display: "inline-block",
+                  }}
+                />
+                {" "}FALANDO
+              </div>
+            )}
+            {showStartMediaButton && (
               <button
+                onClick={attemptVideoPlay}
+                style={{
+                  position: "absolute", top: 0, right: 0, bottom: 0, left: 0, display: "flex", alignItems: "center",
+                  justifyContent: "center", background: "rgba(0,0,0,.65)", color: "#fff",
+                  border: "none", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 14,
+                  fontWeight: 600, gap: 8,
+                }}
+              >
+                ▶ Iniciar vídeo / áudio
+              </button>
+            )}
+          </div>
+          {/* session deck */}
+          <div className="pb" style={{ flex: "0 0 auto" }}>
+            <div className="sessiondeck">
+              <div className="connectrow">
+                {!connected ? (
+                  <button
+                    className="btn primary"
+                    onClick={startSession}
+                    disabled={starting}
+                    style={{ flex: 1, justifyContent: "center" }}
+                  >
+                    {starting ? "⟳ Conectando..." : "⚡ Conectar avatar"}
+                  </button>
+                ) : (
+                  <button
+                    className="btn danger"
+                    onClick={stopSession}
+                    style={{ flex: 1, justifyContent: "center" }}
+                  >
+                    ☎ Encerrar sessão
+                  </button>
+                )}
+                <button
+                  className={`btn${!muted ? " primary" : ""}`}
+                  onClick={toggleMute}
+                  disabled={!speechSupported && settings.sttEngine !== "deepgram"}
+                  title={muted ? "Ativar microfone" : "Mutar microfone"}
+                >
+                  {muted ? "🎙 Mic OFF" : "🎤 Mic ON"}
+                </button>
+              </div>
+
+              <div className="devrow">
+                <button
+                  className="devbtn"
+                  onClick={interruptAvatar}
+                  disabled={!connected}
+                  title="Atalho: espaço"
+                >
+                  <span className="ic">⏹</span> Interromper
+                </button>
+                <button className="devbtn" onClick={testAvatar} disabled={!connected}>
+                  <span className="ic">🔊</span> Testar fala
+                </button>
+                <button className="devbtn" onClick={testMicrophone} disabled={!speechSupported}>
+                  <span className="ic">🎤</span>
+                  {micTestRemaining > 0 ? ` Testando ${micTestRemaining}s…` : " Testar mic"}
+                </button>
+              </div>
+
+              <div className="swrow">
+                <span className="lab">
+                  Barge-in
+                  <small>interromper o avatar falando por cima</small>
+                </span>
+                <div
+                  className={`sw${bargeIn ? " on" : ""}`}
+                  onClick={() => setBargeIn((v) => !v)}
+                  role="switch"
+                  aria-checked={bargeIn}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "var(--ink-2)", marginBottom: 5 }}>
+                  Enviar por texto
+                </div>
+                <div className="composer">
+                  <input
+                    className="inp"
+                    value={text}
+                    onChange={(e) => { setText(e.target.value); setLiveTranscript(e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
+                    placeholder="Digite uma mensagem…"
+                  />
+                  <button
+                    className="btn primary sm"
+                    onClick={() => void handleSend()}
+                    disabled={!connected || !text.trim()}
+                  >
+                    Enviar
+                  </button>
+                </div>
+              </div>
+
+              {callStartTs && (
+                <div className="sessmeta">
+                  ⏱ sessão:{" "}
+                  <b>
+                    {(() => {
+                      const sec = Math.max(0, (nowTs - callStartTs) / 1000);
+                      return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(
+                        Math.floor(sec % 60),
+                      ).padStart(2, "0")}`;
+                    })()}
+                  </b>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ════ Status ao vivo — cols 7-10, row 1 ════ */}
+        <div className="panel" style={{ gridColumn: "7/11", gridRow: 1 }}>
+          <div className="ph">
+            <span className="ico">📡</span>
+            <span className="tt">Status <small>· ao vivo</small></span>
+          </div>
+          <div className="pb">
+            <div className="statlist">
+              <div className="statrow">
+                <span
+                  className={`led ${rtcToTone(webrtcState)}${
+                    rtcToTone(webrtcState) === "amber" ? " blink" : ""
+                  }`}
+                />
+                <span className="nm">
+                  WebRTC<small>conexão</small>
+                </span>
+                <span
+                  className={`vl ${
+                    rtcToTone(webrtcState) === "green"
+                      ? "ok"
+                      : rtcToTone(webrtcState) === "red"
+                        ? "err"
+                        : "warn"
+                  }`}
+                >
+                  {webrtcState}
+                </span>
+              </div>
+              <div className="statrow">
+                <span
+                  className={`led ${connected ? "green" : starting ? "amber blink" : "off"}`}
+                />
+                <span className="nm">
+                  LiveAvatar<small>sessão</small>
+                </span>
+                <span className={`vl ${connected ? "ok" : ""}`}>
+                  {connected ? "conectada" : starting ? "conectando…" : "não iniciada"}
+                </span>
+              </div>
+              <div className="statrow">
+                <span className={`led ${kindToTone(statuses.video.state)}`} />
+                <span className="nm">
+                  Vídeo<small>rtc.video</small>
+                </span>
+                <span
+                  className={`vl ${
+                    statuses.video.state === "ok"
+                      ? "ok"
+                      : statuses.video.state === "err"
+                        ? "err"
+                        : ""
+                  }`}
+                >
+                  {avatarSpeaking
+                    ? "falando"
+                    : statuses.video.state === "ok"
+                      ? "recebendo"
+                      : statuses.video.detail || "—"}
+                </span>
+              </div>
+              <div className="statrow">
+                <span
+                  className={`led ${muted ? "off" : kindToTone(statuses.microphone.state)}`}
+                />
+                <span className="nm">
+                  Microfone<small>getUserMedia</small>
+                </span>
+                <span
+                  className={`vl ${!muted && statuses.microphone.state === "ok" ? "ok" : ""}`}
+                >
+                  {micState}
+                </span>
+              </div>
+              <div className="statrow">
+                <span
+                  className={`led ${
+                    muted ? "off" : micLastError ? "red" : listening ? "green" : "amber blink"
+                  }`}
+                />
+                <span className="nm">
+                  STT<small>{settings.sttEngine}</small>
+                </span>
+                <span className="vl">
+                  {muted
+                    ? "desligado"
+                    : micLastError
+                      ? "erro"
+                      : listening
+                        ? "ouvindo"
+                        : "aguardando"}
+                </span>
+              </div>
+              <div className="statrow">
+                <span
+                  className={`led ${
+                    n8nStatus.state === "ok"
+                      ? "green"
+                      : n8nStatus.state === "err"
+                        ? "red"
+                        : n8nStatus.state === "waiting"
+                          ? "amber blink"
+                          : "off"
+                  }`}
+                />
+                <span className="nm">
+                  n8n<small>webhook brain</small>
+                </span>
+                <span
+                  className={`vl ${
+                    n8nStatus.state === "ok"
+                      ? "ok"
+                      : n8nStatus.state === "err"
+                        ? "err"
+                        : ""
+                  }`}
+                >
+                  {n8nStatus.detail || n8nStatus.state}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ════ Config readiness — cols 11-13, row 1 ════ */}
+        <div className="panel" style={{ gridColumn: "11/13", gridRow: 1 }}>
+          <div className="ph">
+            <span className="ico">✅</span>
+            <span className="tt">Config</span>
+            <div className="r">
+              <button
+                className="btn sm"
                 onClick={() => {
                   setSettingsDraft(settings);
                   setSettingsOpen(true);
                 }}
-                className="rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
-                aria-label="Configurações"
-                title="Configurações"
               >
-                ⚙️ Configurações
-              </button>
-              <button
-                onClick={() => setDiagOpen(true)}
-                className="rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
-                aria-label="Diagnóstico"
-                title="Diagnóstico"
-              >
-                🩺 Diagnóstico
+                Editar
               </button>
             </div>
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                onClick={() => setMode(m.id)}
-                className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${
-                  mode === m.id
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-foreground hover:bg-muted"
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
+          <div className="pb">
+            {(() => {
+              const req = (v: string) => (v ?? "").trim() !== "";
+              const avatarOk = (
+                ["avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]
+              ).every((k) => req(settings[k] as string));
+              const webhooksOk = (
+                [
+                  "webhookConversa",
+                  "webhookReuniao",
+                  "webhookEntrevistador",
+                  "webhookFiller",
+                ] as (keyof Settings)[]
+              ).every((k) => req(settings[k] as string));
+              return (
+                <div className="statlist">
+                  {(
+                    [
+                      {
+                        nm: "Avatar & Voz",
+                        sub: "heygen",
+                        ok: avatarOk,
+                        vl: avatarOk ? "ok" : "API key ausente",
+                      },
+                      {
+                        nm: "Webhooks n8n",
+                        sub: "4 endpoints",
+                        ok: webhooksOk,
+                        vl: webhooksOk ? "4/4 ok" : "incompleto",
+                      },
+                      { nm: "Modos", sub: "comportamento", ok: true, vl: "ok" },
+                      { nm: "Recall", sub: "opcional", ok: true, vl: "opcional" },
+                    ] as { nm: string; sub: string; ok: boolean; vl: string }[]
+                  ).map((r) => (
+                    <div className="statrow" key={r.nm}>
+                      <span className={`led ${r.ok ? "green" : "red blink"}`} />
+                      <span className="nm">
+                        {r.nm}
+                        <small>{r.sub}</small>
+                      </span>
+                      <span className={`vl ${r.ok ? "ok" : "err"}`}>{r.vl}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
+        </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {(Object.keys(statuses) as StatusKey[]).map((key) => (
-              <div
-                key={key}
-                className="rounded-md border border-border bg-card p-3 text-card-foreground"
-              >
-                <div className="flex items-start gap-2">
-                  <StatusDot state={statuses[key].state} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium">{statuses[key].label}</div>
-                    <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted-foreground">
-                      {statuses[key].detail}
-                    </pre>
+        {/* ════ Hot-swap countdown — cols 7-10, row 2 ════ */}
+        <div className="panel" style={{ gridColumn: "7/10", gridRow: 2 }}>
+          <div className="ph">
+            <span className="ico">🔄</span>
+            <span className="tt">Hot-swap <small>· sessão HeyGen</small></span>
+          </div>
+          <div className="pb">
+            {(() => {
+              const swapTotal = settings.hotSwapAfterSec || HOT_SWAP_AFTER_SEC_DEFAULT;
+              const swapLeft =
+                connected && sessionStartedAtRef.current
+                  ? Math.max(
+                      0,
+                      swapTotal -
+                        Math.floor((nowTs - sessionStartedAtRef.current) / 1000),
+                    )
+                  : null;
+              const pct = swapLeft !== null ? (swapLeft / swapTotal) * 100 : 100;
+              const R = 40;
+              const circ = 2 * Math.PI * R;
+              const dash = (pct / 100) * circ;
+              const strokeColor =
+                swapLeft !== null && swapLeft < 30 ? "var(--red)" : "var(--accent)";
+              return (
+                <div className="hotswap">
+                  <div className="ring">
+                    <svg width="96" height="96" viewBox="0 0 96 96">
+                      <circle
+                        cx="48" cy="48" r={R}
+                        fill="none" stroke="var(--border-2)" strokeWidth="5"
+                      />
+                      <circle
+                        cx="48" cy="48" r={R}
+                        fill="none" stroke={strokeColor} strokeWidth="5"
+                        strokeDasharray={`${dash} ${circ}`}
+                        strokeLinecap="round"
+                        transform="rotate(-90 48 48)"
+                      />
+                      <text
+                        x="48" y="44" textAnchor="middle" dominantBaseline="middle"
+                        style={{
+                          fontFamily: "var(--mono)", fontSize: 15,
+                          fontWeight: 600, fill: "var(--ink)",
+                        }}
+                      >
+                        {swapLeft !== null ? `${swapLeft}s` : "—"}
+                      </text>
+                      <text
+                        x="48" y="61" textAnchor="middle"
+                        style={{ fontFamily: "var(--mono)", fontSize: 9, fill: "var(--ink-3)" }}
+                      >
+                        /{swapTotal}s
+                      </text>
+                    </svg>
+                  </div>
+                  <div className="meta">
+                    <div className="big">
+                      {swapLeft !== null ? `T-${swapLeft}s` : "inativo"}
+                    </div>
+                    <div className="sub">
+                      Renova a cada <b>{swapTotal}s</b>
+                      <br />
+                      Dribla o limite de 5min do plano HeyGen
+                    </div>
                   </div>
                 </div>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* ════ STT / Voice diagnostics — cols 10-13, row 2 ════ */}
+        <div className="panel" style={{ gridColumn: "10/13", gridRow: 2 }}>
+          <div className="ph">
+            <span className="ico">🎙</span>
+            <span className="tt">
+              STT <small>· {settings.sttEngine}</small>
+            </span>
+          </div>
+          <div className="pb">
+            <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+              <button
+                className={`btn sm${settings.sttEngine === "webspeech" ? " primary" : ""}`}
+                onClick={() => setSttEngine("webspeech")}
+              >
+                Web Speech
+              </button>
+              <button
+                className={`btn sm${settings.sttEngine === "deepgram" ? " primary" : ""}`}
+                onClick={() => setSttEngine("deepgram")}
+              >
+                Deepgram
+              </button>
+            </div>
+            <div className="statlist" style={{ marginBottom: 10 }}>
+              {(
+                [
+                  {
+                    nm: "estado",
+                    led: muted ? "off" : micLastError ? "red" : listening ? "green" : "amber",
+                    vl: micState,
+                    cls: "",
+                  },
+                  {
+                    nm: "interim",
+                    led: micLastInterim ? "amber" : "off",
+                    vl: micLastInterim || "—",
+                    cls: "",
+                  },
+                  {
+                    nm: "último FINAL",
+                    led: micLastFinal ? "green" : "off",
+                    vl: micLastFinal || "—",
+                    cls: "",
+                  },
+                  {
+                    nm: "último erro",
+                    led: micLastError ? "red" : "off",
+                    vl: micLastError || "—",
+                    cls: micLastError ? "err" : "",
+                  },
+                ] as { nm: string; led: string; vl: string; cls: string }[]
+              ).map((row) => (
+                <div className="statrow" key={row.nm}>
+                  <span className={`led ${row.led}`} />
+                  <span className="nm">{row.nm}</span>
+                  <span
+                    className={`vl ${row.cls}`}
+                    style={{
+                      maxWidth: 100,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {row.vl}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="subhd">transcrição ao vivo</div>
+            <div className="transout">
+              {liveTranscript || micLastInterim ? (
+                <div className="fl">{liveTranscript || micLastInterim}</div>
+              ) : (
+                <div className="il">Fale algo para ver a transcrição aqui.</div>
+              )}
+            </div>
+            {mode === "entrevistador" && !muted && interviewerWaiting && (
+              <div className="cfgstatus">
+                <span className="led green blink" />
+                Ouvindo…{" "}
+                {settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de
+                silêncio para enviar
               </div>
-            ))}
+            )}
+          </div>
+        </div>
+
+        {/* ════ Log verboso — cols 1-6, rows 3-4 ════ */}
+        <div
+          className="panel"
+          style={{ gridColumn: "1/7", gridRow: "3/5", minHeight: 340 }}
+        >
+          <div className="ph">
+            <span className="ico">›_</span>
+            <span className="tt">
+              Log verboso <small>· fluxo principal</small>
+            </span>
+            <div className="r">
+              <span className="badge">{logs.length} lin</span>
+            </div>
+          </div>
+          <div
+            className="pb flush"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              flex: "1 1 auto",
+            }}
+          >
+            <div className="logtools">
+              <span
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  color: "var(--ink-3)",
+                }}
+              >
+                ao vivo · DEBUG
+              </span>
+            </div>
+            <div className="logfeed" style={{ flex: "1 1 0", minHeight: 220 }}>
+              {logs.length === 0 ? (
+                <div className="logline debug">
+                  <span className="ts">—</span>
+                  <span className="lv">DEBUG</span>
+                  <span className="msg">sem eventos ainda…</span>
+                </div>
+              ) : (
+                logs.slice(-300).map((entry, i) => {
+                  const ts = new Date(entry.t).toLocaleTimeString("pt-BR", {
+                    hour12: false,
+                  });
+                  const lv =
+                    entry.kind === "err"
+                      ? "err"
+                      : entry.kind === "ok"
+                        ? "info"
+                        : "debug";
+                  return (
+                    <div key={`${entry.t}-${i}`} className={`logline ${lv}`}>
+                      <span className="ts">{ts}</span>
+                      <span className="lv">{lv.toUpperCase()}</span>
+                      <span className="msg">{entry.msg}</span>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={logEndRef} />
+            </div>
+            <div className="logfoot">
+              linhas <b>{logs.length}</b> · nível <b>DEBUG</b>
+            </div>
+          </div>
+        </div>
+
+        {/* ════ Modos & Comportamento — cols 7-13, rows 3-4 ════ */}
+        <div
+          className="panel"
+          style={{ gridColumn: "7/13", gridRow: "3/5", minHeight: 340 }}
+        >
+          <div className="ph">
+            <span className="ico">🎛</span>
+            <span className="tt">
+              Modos <small>· comportamento</small>
+            </span>
+            <div className="r">
+              <span className="badge">
+                {MODES.find((m) => m.id === mode)?.label ?? mode}
+              </span>
+            </div>
+          </div>
+          <div className="pb">
+            <div className="modegrid">
+              {(
+                [
+                  {
+                    id: "conversa" as Mode,
+                    name: "Conversa",
+                    tag: "sempre ativo",
+                    tagCls: "",
+                    desc: "Responde tudo o que for dito. Ideal para demos presenciais e interações abertas.",
+                  },
+                  {
+                    id: "reuniao" as Mode,
+                    name: "Reunião",
+                    tag: "wake word",
+                    tagCls: "blue",
+                    desc: 'Fica em silêncio até ser chamado pelo nome ("Renante"). Ideal para reuniões com vários participantes.',
+                  },
+                  {
+                    id: "entrevistador" as Mode,
+                    name: "Entrevistador",
+                    tag: "sempre ativo",
+                    tagCls: "",
+                    desc: `Acumula a fala e aguarda ${settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de silêncio antes de responder.`,
+                  },
+                ] as {
+                  id: Mode;
+                  name: string;
+                  tag: string;
+                  tagCls: string;
+                  desc: string;
+                }[]
+              ).map((m) => (
+                <div
+                  key={m.id}
+                  className={`modecard${mode === m.id ? " active" : ""}`}
+                  onClick={() => setMode(m.id)}
+                >
+                  <div className="mh">
+                    <b>{m.name}</b>
+                    <span
+                      className={`modetag${
+                        mode === m.id ? " active" : m.tagCls ? " " + m.tagCls : ""
+                      }`}
+                    >
+                      {m.tag}
+                    </span>
+                  </div>
+                  <div className="modeinfo">{m.desc}</div>
+                  {mode === m.id && (
+                    <>
+                      <label>Fala inicial</label>
+                      <textarea
+                        className="inp"
+                        style={{
+                          minHeight: 52,
+                          fontFamily: "var(--sans)",
+                          fontSize: 11.5,
+                          resize: "vertical",
+                        }}
+                        value={settings.meetConfigs[m.id]?.reconnectGreeting ?? ""}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            meetConfigs: {
+                              ...s.meetConfigs,
+                              [m.id]: {
+                                ...s.meetConfigs[m.id],
+                                reconnectGreeting: e.target.value,
+                              },
+                            },
+                          }))
+                        }
+                        placeholder="Fala de saudação ao conectar…"
+                      />
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Google Meet (Camada 3) */}
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop: "1px solid var(--border)",
+                display: "flex",
+                gap: 14,
+                flexWrap: "wrap",
+                alignItems: "flex-start",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div className="subhd">Google Meet · Camada 3</div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {settings.meetLink ? (
+                    <>
+                      <span
+                        style={{
+                          fontFamily: "var(--mono)",
+                          fontSize: 11,
+                          color: "var(--ink-2)",
+                        }}
+                      >
+                        {settings.meetLink.length > 45
+                          ? settings.meetLink.slice(0, 45) + "…"
+                          : settings.meetLink}
+                      </span>
+                      {!botId ? (
+                        <button
+                          className="btn primary sm"
+                          onClick={() => void joinMeetingWithAvatar()}
+                          disabled={botJoining || !connected}
+                        >
+                          {botJoining ? "Entrando…" : "Entrar na reunião"}
+                        </button>
+                      ) : (
+                        <button
+                          className="btn danger sm"
+                          onClick={() => void leaveMeetingWithBot()}
+                        >
+                          Sair da reunião
+                        </button>
+                      )}
+                      {botStatus && (
+                        <span
+                          style={{
+                            fontFamily: "var(--mono)",
+                            fontSize: 10,
+                            color: "var(--ink-3)",
+                          }}
+                        >
+                          bot: {botStatus}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      Configure o link do Google Meet nas Configurações → Meet.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                className="btn sm"
+                onClick={() => {
+                  setSettingsDraft(settings);
+                  setSettingsOpen(true);
+                  setSettingsTab("meet");
+                }}
+              >
+                ⚙ Config Meet
+              </button>
+            </div>
           </div>
         </div>
 
       </div>
+      {/* /bento */}
 
-      <main className="mx-auto flex w-full max-w-[1800px] flex-col gap-4 p-3 sm:p-4 md:p-6 lg:p-8">
-        {!speechSupported && settings.sttEngine !== "deepgram" && (
-          <div className="rounded-md border border-destructive bg-card p-4 text-lg font-semibold text-destructive">
-            Este navegador não tem reconhecimento de voz (Web Speech). Abra no Google Chrome no
-            computador — ou troque a transcrição para <strong>Deepgram</strong> (funciona em
-            todos os navegadores) no seletor abaixo / nas Configurações.
-          </div>
-        )}
-
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-          <div className="flex flex-col gap-3">
-            <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-card">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted={false}
-                controls
-                poster={settings.posterUrl || undefined}
-                className="h-full w-full object-cover"
-              />
-              {!connected && !settings.posterUrl && (
-                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-                  <span className="text-4xl">🎭</span>
-                  <span className="text-sm">Avatar desconectado — clique em "Conectar avatar"</span>
-                </div>
-              )}
-              {avatarSpeaking && (
-                <div className="absolute left-2 top-2 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground">
-                  falando...
-                </div>
-              )}
-              {showStartMediaButton && (
-                <div className="absolute inset-0 flex items-center justify-center bg-background/80">
-                  <button
-                    onClick={attemptVideoPlay}
-                    className="rounded-md bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow"
-                  >
-                    ▶️ Iniciar vídeo/áudio
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[auto_1fr] md:items-center">
-              <button
-                onClick={toggleMute}
-                disabled={!speechSupported && settings.sttEngine !== "deepgram"}
-                aria-label={muted ? "Ativar microfone" : "Mutar microfone"}
-                className={`relative h-20 w-20 rounded-full border-2 text-3xl transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-                  listening
-                    ? "animate-pulse border-destructive bg-destructive text-destructive-foreground"
-                    : muted
-                      ? "border-border bg-muted text-muted-foreground"
-                      : "border-primary bg-primary text-primary-foreground"
-                }`}
-              >
-                {muted ? "🎙️" : listening ? "🔴" : "🎤"}
-              </button>
-              <div className="rounded-md border border-border bg-card p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium">Transcrição ao vivo</div>
-                  <button
-                    type="button"
-                    onClick={toggleCaptions}
-                    aria-pressed={settings.captionsEnabled}
-                    title={settings.captionsEnabled ? "Desativar legendas" : "Ativar legendas"}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      settings.captionsEnabled
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-card text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {settings.captionsEnabled ? "💬 Legendas ON" : "💬 Legendas OFF"}
-                  </button>
-                </div>
-                {settings.captionsEnabled && (
-                  <div className="mt-2 min-h-16 rounded-md border border-border bg-background p-3 text-lg font-semibold">
-                    {liveTranscript || text || "Fale algo para ver a transcrição aqui em tempo real."}
-                  </div>
-                )}
-                {mode === "entrevistador" && !muted && interviewerWaiting && (
-                  <div className="mt-2 flex items-center gap-2 rounded-md border border-status-ok bg-card px-3 py-2 text-sm font-medium text-status-ok">
-                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-status-ok" />
-                    🎧 Ouvindo… pode pausar pra pensar (só envio depois de{" "}
-                    {settings.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT}s de silêncio)
-                  </div>
-                )}
-                <div className="mt-2 text-sm text-muted-foreground">
-                  {!speechSupported
-                    ? "Sem suporte a voz"
-                    : muted
-                      ? "Mic desligado"
-                      : avatarSpeaking
-                        ? "Avatar falando"
-                        : settings.meetConfigs[mode]?.behavior === "wake" && !meetingActive
-                          ? 'Dormindo (diga "Renante")'
-                          : settings.meetConfigs[mode]?.behavior === "wake" && meetingActive
-                            ? "Sessão ativa"
-                            : listening
-                              ? "Ouvindo..."
-                              : "Aguardando fala"}
-                </div>
-              </div>
-            </div>
-
-            <div
-              className={`rounded-md border p-3 text-sm ${
-                micState === "ouvindo"
-                  ? "border-status-ok bg-card"
-                  : micState === "erro"
-                    ? "border-destructive bg-card"
-                    : micState === "pedindo permissão"
-                      ? "border-status-waiting bg-card"
-                      : "border-border bg-card"
-              }`}
-            >
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="font-semibold">🎙️ Diagnóstico de voz</div>
-                <div className="font-mono text-xs">
-                  estado: <span className="font-semibold">{micState}</span>
-                  {micTestRemaining > 0 && (
-                    <> · teste: {micTestRemaining}s</>
-                  )}
-                </div>
-              </div>
-              <div className="grid gap-1 font-mono text-[11px] leading-snug">
-                <div>
-                  <span className="text-muted-foreground">parcial (interim):</span>{" "}
-                  <span className="break-words">{micLastInterim || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">último FINAL:</span>{" "}
-                  <span className="break-words font-semibold">{micLastFinal || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">último erro:</span>{" "}
-                  <span className={`break-words ${micLastError ? "text-destructive" : ""}`}>
-                    {micLastError || "—"}
-                  </span>
-                </div>
-              </div>
-              {typeof window !== "undefined" && !window.isSecureContext && (
-                <div className="mt-2 text-xs text-destructive">
-                  ⚠️ Página não está em HTTPS — microfone bloqueado.
-                </div>
-              )}
-            </div>
-
-            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-              <button
-                onClick={interruptAvatar}
-                disabled={!connected}
-                className="rounded-md bg-destructive px-4 py-3 text-sm font-semibold text-destructive-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title="Atalho: barra de espaço"
-              >
-                ⏹️ Interromper (espaço)
-              </button>
-              <label className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={bargeIn}
-                  onChange={(e) => setBargeIn(e.target.checked)}
-                />
-                Permitir interromper falando
-              </label>
-            </div>
-
-            <div className="grid gap-2 md:grid-cols-2">
-              <button
-                onClick={testAvatar}
-                disabled={!connected}
-                className="rounded-md bg-secondary px-4 py-3 text-sm font-semibold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                🔊 Testar avatar (falar oi)
-              </button>
-              <button
-                onClick={testMicrophone}
-                disabled={!speechSupported}
-                className="rounded-md bg-secondary px-4 py-3 text-sm font-semibold text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                🎤 Testar microfone (5s){micTestRemaining > 0 ? ` — ${micTestRemaining}s` : ""}
-              </button>
-            </div>
-          </div>
-
-          <aside className="flex flex-col gap-3">
-            <div className="rounded-md border border-border bg-card p-2">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-muted-foreground">Transcrição da voz</span>
-                {!speechSupported && (
-                  <span className="text-[10px] text-destructive">Web Speech indisponível neste navegador</span>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  onClick={() => setSttEngine("webspeech")}
-                  title="Reconhecimento do navegador (grátis, só Chrome/Edge)"
-                  className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                    settings.sttEngine === "webspeech"
-                      ? "bg-primary text-primary-foreground"
-                      : "border border-border bg-card text-foreground hover:bg-muted"
-                  }`}
-                >
-                  Web Speech
-                  <span className="block text-[9px] font-normal opacity-80">Chrome/Edge · grátis</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSttEngine("deepgram")}
-                  title="Deepgram (funciona em todos os navegadores; requer API key nas Configurações)"
-                  className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                    settings.sttEngine === "deepgram"
-                      ? "bg-primary text-primary-foreground"
-                      : "border border-border bg-card text-foreground hover:bg-muted"
-                  }`}
-                >
-                  Deepgram
-                  <span className="block text-[9px] font-normal opacity-80">todos os navegadores</span>
-                </button>
-              </div>
-              {settings.sttEngine === "deepgram" && (
-                <span className="mt-1 block text-[10px] text-muted-foreground">
-                  Usa a chave do Deepgram do servidor (.env / Vercel).
-                </span>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              {!connected ? (
-                <button
-                  onClick={startSession}
-                  disabled={starting}
-                  className="flex-1 rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {starting ? "Conectando..." : "Conectar avatar"}
-                </button>
-              ) : (
-                <button
-                  onClick={stopSession}
-                  className="flex-1 rounded-md bg-destructive px-4 py-3 text-sm font-semibold text-destructive-foreground"
-                >
-                  Encerrar
-                </button>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <input
-                value={text}
-                onChange={(event) => {
-                  setText(event.target.value);
-                  setLiveTranscript(event.target.value);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void handleSend();
-                }}
-                placeholder="Digite ou fale uma pergunta..."
-                className="min-w-0 flex-1 rounded-md border border-border bg-input px-3 py-2 text-sm"
-              />
-              <button
-                onClick={() => void handleSend()}
-                disabled={!connected || !text.trim()}
-                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Enviar
-              </button>
-            </div>
-
-            <div className="rounded-md border border-border bg-card text-card-foreground">
-              <div className="border-b border-border px-3 py-2 text-xs uppercase text-muted-foreground">
-                Log verboso
-              </div>
-              <div className="h-[520px] overflow-auto p-3 font-mono text-xs leading-relaxed">
-                {logs.length === 0 && (
-                  <div className="text-muted-foreground">Sem eventos ainda.</div>
-                )}
-                {logs.map((entry, index) => (
-                  <pre
-                    key={`${entry.t}-${index}`}
-                    className={`mb-2 whitespace-pre-wrap break-words ${
-                      entry.kind === "err"
-                        ? "text-destructive"
-                        : entry.kind === "ok"
-                          ? "text-foreground"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    [{new Date(entry.t).toLocaleTimeString()}] {entry.msg}
-                  </pre>
-                ))}
-                <div ref={logEndRef} />
-              </div>
-            </div>
-          </aside>
-        </section>
-      </main>
 
       {meetOpen && (() => {
         const modeLabel = MODES.find((m) => m.id === mode)?.label ?? mode;
