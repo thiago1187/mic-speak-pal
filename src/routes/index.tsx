@@ -3053,21 +3053,26 @@ function Index() {
                 )}
               </div>
             )}
-            {showStartMediaButton && (
-              <button onClick={attemptVideoPlay} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.65)", color: "#fff", border: "none", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 14, fontWeight: 600, gap: 8, zIndex: 5 }}>
-                ▶ Iniciar vídeo / áudio
-              </button>
-            )}
             {/* ── overlay quando conectado ── */}
             {connected && (<>
               {/* vignette */}
               <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 1, background: "linear-gradient(90deg,rgba(0,0,0,.55) 0%,rgba(0,0,0,0) 22%,rgba(0,0,0,0) 74%,rgba(0,0,0,.6) 100%),linear-gradient(180deg,rgba(0,0,0,.35) 0%,rgba(0,0,0,0) 18%,rgba(0,0,0,0) 72%,rgba(0,0,0,.7) 100%)" }} />
-              {/* FALANDO badge */}
-              {avatarSpeaking && (
-                <div style={{ position: "absolute", top: 8, right: 8, zIndex: 4, display: "flex", alignItems: "center", gap: 5, background: "rgba(0,0,0,.6)", backdropFilter: "blur(4px)", borderRadius: 20, padding: "3px 8px", fontFamily: "var(--mono)", fontSize: 9.5, color: "#4ade80", border: "1px solid rgba(74,222,128,.3)" }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 6px #4ade80", display: "inline-block", flexShrink: 0 }} /> FALANDO
-                </div>
-              )}
+              {/* FALANDO badge + botão de mute */}
+              <div style={{ position: "absolute", top: 8, right: 8, zIndex: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                {avatarSpeaking && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, background: "rgba(0,0,0,.6)", backdropFilter: "blur(4px)", borderRadius: 20, padding: "3px 8px", fontFamily: "var(--mono)", fontSize: 9.5, color: "#4ade80", border: "1px solid rgba(74,222,128,.3)" }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 6px #4ade80", display: "inline-block", flexShrink: 0 }} /> FALANDO
+                  </div>
+                )}
+                <button
+                  onClick={toggleMute}
+                  disabled={!speechSupported && settings.sttEngine !== "deepgram"}
+                  title={muted ? "Ativar escuta" : "Cortar escuta"}
+                  style={{ display: "flex", alignItems: "center", gap: 5, background: muted ? "rgba(220,38,38,.85)" : "rgba(0,0,0,.6)", backdropFilter: "blur(4px)", borderRadius: 20, padding: "3px 10px", fontFamily: "var(--mono)", fontSize: 9.5, color: "#fff", border: `1px solid ${muted ? "rgba(220,38,38,.5)" : "rgba(255,255,255,.2)"}`, cursor: "pointer", whiteSpace: "nowrap" }}
+                >
+                  {muted ? "🔇 escuta OFF" : "🎤 escuta ON"}
+                </button>
+              </div>
               {/* log (esquerda) */}
               <div style={{ position: "absolute", left: 6, top: 6, bottom: 88, zIndex: 3, width: "32%", minWidth: 100, maxWidth: 190, display: "flex", flexDirection: "column" }}>
                 <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 8, border: "1px solid rgba(255,255,255,.1)", background: "rgba(8,10,14,.85)", backdropFilter: "blur(8px)", boxShadow: "0 4px 16px rgba(0,0,0,.5)", flex: logCollapsed ? "0 0 auto" : "1 1 0", minHeight: 0 }}>
@@ -4090,10 +4095,10 @@ function Index() {
             </button>
             <button
               onClick={() => setMeetOpen(false)}
-              title="Minimizar"
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25"
+              title="Voltar ao painel"
+              className="flex h-12 items-center justify-center gap-1.5 rounded-full border border-white/12 bg-white/12 px-4 text-sm font-medium text-white backdrop-blur hover:bg-white/25"
             >
-              ⤓
+              ⊟ Painel
             </button>
             <button
               onClick={() => { void stopSession(); }}
