@@ -3,6 +3,9 @@
 ## [Não lançado]
 
 ### 2026-06-19
+- **Fix:** overlay da sessão (tela cheia do avatar) ficava atrás dos painéis do bento após arrastar/redimensionar — z-index elevado para `1000` para garantir que sempre fica na frente
+
+### 2026-06-19
 - **Painel Avatar & Voz:** adiciona campo `deepgramApiKey` + seção "Puxar da API HeyGen" com botão de carregamento, select de avatar (com preview de imagem) e select de voz
 - **Painel Modos:** separa o campo `greeting` (fala na 1ª conexão) do `reconnectGreeting` (fala ao reconectar no hot-swap) — antes era um único campo
 - **Painel Prontidão:** atualiza título para "Prontidão · 4 painéis", ícone ✓, e status com contadores exatos (ex: "3/4 configurados")
