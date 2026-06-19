@@ -3024,7 +3024,7 @@ function Index() {
           {/* ── vídeo + overlay de sessão ── */}
           <div
             className="avbox"
-            style={{ flex: "1 1 auto", minHeight: 200, borderRadius: 0, position: "relative", background: connected ? "#000" : undefined }}
+            style={{ flex: "0 0 auto", aspectRatio: "16/9", borderRadius: 0, position: "relative", background: connected ? "#000" : "var(--panel-2)" }}
           >
             <div className="grid-ov" />
             {connected && <div className="scan" />}
@@ -3148,8 +3148,7 @@ function Index() {
               </div>
             </>)}
           </div>
-          {/* session deck — só quando desconectado */}
-          {!connected && (
+          {/* session deck */}
           <div className="pb" style={{ flex: "0 0 auto" }}>
             <div className="sessiondeck">
 
@@ -3184,9 +3183,15 @@ function Index() {
 
               {/* connect row */}
               <div className="connectrow">
-                <button className="btn primary" onClick={bentoDestMeet ? () => void joinMeetingWithAvatar() : startSession} disabled={starting || (bentoDestMeet && botJoining)} style={{ flex: 1, justifyContent: "center" }}>
-                  {starting || botJoining ? "⟳ Conectando..." : bentoDestMeet ? "🤖 Entrar no Meet" : "⚡ Conectar avatar"}
-                </button>
+                {!connected ? (
+                  <button className="btn primary" onClick={bentoDestMeet ? () => void joinMeetingWithAvatar() : startSession} disabled={starting || (bentoDestMeet && botJoining)} style={{ flex: 1, justifyContent: "center" }}>
+                    {starting || botJoining ? "⟳ Conectando..." : bentoDestMeet ? "🤖 Entrar no Meet" : "⚡ Conectar avatar"}
+                  </button>
+                ) : (
+                  <button className="btn danger" onClick={bentoDestMeet ? () => void leaveMeetingWithBot() : stopSession} style={{ flex: 1, justifyContent: "center" }}>
+                    {bentoDestMeet ? "🤖 Sair do Meet" : "☎ Encerrar sessão"}
+                  </button>
+                )}
                 <button className={`btn${!muted ? " primary" : ""}`} onClick={toggleMute} disabled={!speechSupported && settings.sttEngine !== "deepgram"} title={muted ? "Ativar microfone" : "Mutar microfone"}>
                   {muted ? "🎙 Mic OFF" : "🎤 Mic ON"}
                 </button>
@@ -3194,7 +3199,13 @@ function Index() {
 
               {/* dev actions */}
               <div className="devrow">
-                <button className="devbtn off" onClick={testMicrophone} disabled={!speechSupported}>
+                <button className={`devbtn${!connected ? " off" : ""}`} onClick={interruptAvatar} disabled={!connected} title="Atalho: espaço">
+                  <span className="ic">⏹</span><span>Interromper</span><span className="state">{connected ? "ON" : "OFF"}</span>
+                </button>
+                <button className={`devbtn${!connected ? " off" : ""}`} onClick={testAvatar} disabled={!connected}>
+                  <span className="ic">🔊</span><span>Testar fala</span><span className="state">{connected ? "ON" : "OFF"}</span>
+                </button>
+                <button className={`devbtn${!speechSupported ? " off" : ""}`} onClick={testMicrophone} disabled={!speechSupported}>
                   <span className="ic">🎤</span>
                   <span>{micTestRemaining > 0 ? `Testando ${micTestRemaining}s…` : "Testar mic"}</span>
                   <span className="state">{speechSupported ? "ON" : "OFF"}</span>
@@ -3209,13 +3220,27 @@ function Index() {
 
               {/* session meta */}
               <div className="sessmeta">
-                <span className={`led ${starting ? "amber blink" : "red"}`} />
-                {starting ? <b>conectando…</b> : <b>desconectado</b>}
+                <span className={`led ${connected ? "green" : starting ? "amber blink" : "red"}`} />
+                {connected ? (
+                  <>
+                    <b>ao vivo</b>
+                    {callStartTs && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)" }}> · ⏱ {elapsed}</span>}
+                    {botStatus && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--ink-3)" }}> · bot: {botStatus}</span>}
+                  </>
+                ) : starting ? <b>conectando…</b> : <b>desconectado</b>}
+              </div>
+
+              {/* send message */}
+              <div className="deckrow">
+                <label>Enviar mensagem ao avatar</label>
+                <div className="composer">
+                  <input className="inp" value={text} onChange={(e) => { setText(e.target.value); setLiveTranscript(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }} placeholder="Digite e pressione Enviar…" />
+                  <button className="btn primary sm" onClick={() => void handleSend()} disabled={!connected || !text.trim()}>✉ Enviar</button>
+                </div>
               </div>
 
             </div>
           </div>
-          )}
           {grips("avatar")}
         </div>
 
