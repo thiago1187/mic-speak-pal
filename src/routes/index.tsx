@@ -636,6 +636,18 @@ function Index() {
   // ── bento free-form layout ──
   type PanelRect = { x: number; y: number; w: number; h: number };
   const BENTO_KEY = "avatarConsole.freeform.v1";
+  const DEFAULT_RECTS: Record<string, PanelRect> = {
+    avatar:    { x: 1400, y: 20,   w: 440,  h: 720 },
+    status:    { x: 20,   y: 20,   w: 300,  h: 380 },
+    ready:     { x: 20,   y: 420,  w: 320,  h: 280 },
+    hotswap:   { x: 360,  y: 480,  w: 260,  h: 160 },
+    voice:     { x: 340,  y: 20,   w: 280,  h: 380 },
+    log:       { x: 640,  y: 20,   w: 720,  h: 540 },
+    modos:     { x: 20,   y: 1180, w: 1820, h: 700 },
+    avatarvoz: { x: 640,  y: 580,  w: 620,  h: 540 },
+    webhooks:  { x: 20,   y: 720,  w: 600,  h: 400 },
+    recall:    { x: 1280, y: 760,  w: 540,  h: 400 },
+  };
   const [bentoReady, setBentoReady] = useState(false);
   const [bentoRects, setBentoRects] = useState<Record<string, PanelRect>>({});
   const [bentoCell, setBentoCell] = useState(20);
@@ -2664,25 +2676,10 @@ function Index() {
         }
       }
     } catch {}
-    const rafId = requestAnimationFrame(() => {
-      if (cancelled) return;
-      const be = bentoRef.current;
-      if (!be) { setBentoReady(true); return; }
-      const bRect = be.getBoundingClientRect();
-      const bs = getComputedStyle(be);
-      const ox = bRect.left + parseFloat(bs.paddingLeft || "0") + parseFloat(bs.borderLeftWidth || "0");
-      const oy = bRect.top + parseFloat(bs.paddingTop || "0") + parseFloat(bs.borderTopWidth || "0");
-      const s20 = (v: number) => Math.round(v / 20) * 20;
-      const rects: Record<string, PanelRect> = {};
-      Object.entries(panelRefs.current).forEach(([pid, el]) => {
-        if (!el) return;
-        const r = el.getBoundingClientRect();
-        rects[pid] = { x: s20(r.left - ox), y: s20(r.top - oy), w: s20(r.width), h: Math.max(80, s20(r.height)) };
-      });
-      setBentoRects(rects);
-      setBentoReady(true);
-    });
-    return () => { cancelled = true; cancelAnimationFrame(rafId); };
+    // sem dados salvos: usa posições padrão definidas em DEFAULT_RECTS
+    setBentoRects(DEFAULT_RECTS);
+    setBentoReady(true);
+    return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── bento: save to localStorage on change ──
@@ -2794,32 +2791,10 @@ function Index() {
     grip.addEventListener("pointerup", onUp);
   }
 
-  // ── bento: reset to grid defaults ──
+  // ── bento: reset to defaults ──
   function resetBento() {
-    const be = bentoRef.current;
-    if (!be) return;
-    // temporarily remove canvas to get grid layout
-    be.classList.remove("canvas");
-    Object.values(panelRefs.current).forEach((el) => {
-      if (!el) return;
-      el.style.left = el.style.top = el.style.width = el.style.height = el.style.zIndex = "";
-    });
-    be.style.height = "";
-    void be.offsetHeight; // force reflow
-    const bRect = be.getBoundingClientRect();
-    const bs = getComputedStyle(be);
-    const ox = bRect.left + parseFloat(bs.paddingLeft || "0") + parseFloat(bs.borderLeftWidth || "0");
-    const oy = bRect.top + parseFloat(bs.paddingTop || "0") + parseFloat(bs.borderTopWidth || "0");
-    const s = (v: number) => Math.round(v / bentoCell) * bentoCell;
-    const rects: Record<string, PanelRect> = {};
-    Object.entries(panelRefs.current).forEach(([pid, el]) => {
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      rects[pid] = { x: s(r.left - ox), y: s(r.top - oy), w: s(r.width), h: Math.max(80, s(r.height)) };
-    });
-    be.classList.add("canvas");
+    const rects = { ...DEFAULT_RECTS };
     setBentoRects(rects);
-    // apply immediately
     Object.entries(rects).forEach(([pid, r]) => {
       const el = panelRefs.current[pid];
       if (el) { el.style.left = r.x + "px"; el.style.top = r.y + "px"; el.style.width = r.w + "px"; el.style.height = r.h + "px"; }
