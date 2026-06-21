@@ -284,6 +284,8 @@
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
   box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; min-height: 0;
 }
+/* Destaque do painel de Sessão — borda mais escura */
+.cr .panel.panel-accent { border: 2px solid var(--ink-2); }
 .cr .panel > .ph {
   display: flex; align-items: center; gap: 9px; padding: 0 12px 0 12px; height: 38px; flex: 0 0 auto;
   border-bottom: 1px solid var(--border); background: var(--head);

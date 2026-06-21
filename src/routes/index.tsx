@@ -3002,7 +3002,7 @@ function Index() {
         <div
           ref={(el) => { panelRefs.current["avatar"] = el; }}
           data-pid="avatar"
-          className="panel"
+          className="panel panel-accent"
           style={pStyle("avatar", { gridColumn: "1/7", gridRow: "1/3" })}
         >
           <div className="ph">
