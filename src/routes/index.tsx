@@ -2901,7 +2901,7 @@ function Index() {
       {/* ── topbar ── */}
       <div className="topbar">
         <div className="brand">
-          <span className="mark">🎭</span>
+          <span className="mark"><img src="/GZero%20-%20Logo%20Rosa%20-%2014fev22.jpeg" alt="GZero" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 7 }} /></span>
           <div>
             <h1>RenAnte <b>Avatar</b> AI</h1>
             <span className="by">console de diagnóstico · by GZero</span>

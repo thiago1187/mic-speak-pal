@@ -80,9 +80,7 @@ function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rafRef = useRef<number | null>(null);
-  // Refs lidas a cada frame do canvas (sem re-render)
+  // Diagnóstico do WebSocket de transcrição (só com ?debug=1, via console).
   const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
   const logsRef = useRef<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -430,86 +428,6 @@ function MeetAvatar() {
     return () => window.clearInterval(id);
   }, [callGetMeetListenPaused]);
 
-  // ---- loop de canvas: desenha frame do vídeo + overlays a cada animationFrame ----
-  const startCanvasLoop = useCallback(() => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const draw = () => {
-      const W = canvas.width;
-      const H = canvas.height;
-
-      // Frame do vídeo
-      if (video.readyState >= 2) {
-        ctx.drawImage(video, 0, 0, W, H);
-      } else {
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, W, H);
-      }
-
-      // Badge de status (sempre visível)
-      const isSpeaking = isAvatarSpeakingRef.current;
-      const isActive = meetingActiveRef.current;
-      const label = isSpeaking ? "falando…" : isActive ? "ativo" : "ouvindo";
-      const dotColor = isSpeaking ? "#fbbf24" : isActive ? "#34d399" : "rgba(255,255,255,0.3)";
-      ctx.font = "bold 13px sans-serif";
-      const tw = ctx.measureText(label).width;
-      const bw = 14 + tw + 10;
-      const bh = 24;
-      const bx = 10;
-      const by = H - bh - 10;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.beginPath();
-      ctx.roundRect(bx, by, bw, bh, 5);
-      ctx.fill();
-      ctx.fillStyle = dotColor;
-      ctx.beginPath();
-      ctx.arc(bx + 9, by + bh / 2, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.fillText(label, bx + 17, by + bh / 2 + 5);
-
-      // Diagnóstico — só com ?debug=1
-      if (debugRef.current) {
-        const d = wsDiagRef.current;
-        // Painel superior
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
-        ctx.fillRect(0, 0, W, 54);
-        ctx.font = "bold 16px sans-serif";
-        ctx.fillStyle = d.state === "RECEBENDO" ? "#34d399" : d.state === "ERRO" ? "#f87171" : "#fcd34d";
-        ctx.fillText(`WS: ${d.state}  ·  msgs: ${d.count}`, 12, 24);
-        ctx.font = "11px monospace";
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.fillText(`última: ${d.last.slice(0, 120) || "(nenhuma)"}`, 12, 44);
-
-        // Log — painel inferior
-        const logLines = logsRef.current.slice(-15);
-        const lineH = 14;
-        const logPanelH = logLines.length * lineH + 10;
-        const lpy = H - bh - 18 - logPanelH;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(10, lpy, W - 20, logPanelH);
-        ctx.font = "10px monospace";
-        logLines.forEach((l, i) => {
-          ctx.fillStyle = l.kind === "err" ? "#fca5a5" : l.kind === "ok" ? "#6ee7b7" : "rgba(255,255,255,0.65)";
-          ctx.fillText(
-            `[${new Date(l.t).toLocaleTimeString()}] ${l.msg}`.slice(0, 100),
-            14,
-            lpy + 8 + (i + 1) * lineH,
-          );
-        });
-      }
-
-      rafRef.current = requestAnimationFrame(draw);
-    };
-
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    draw();
-  }, []);
-
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
   // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
   // que o áudio do avatar seja captado e entre na reunião. ----
@@ -527,18 +445,12 @@ function MeetAvatar() {
       }
       if (!v.paused) {
         setNeedsGesture(false);
-        // Dimensiona canvas para preencher a viewport e inicia o loop de composição.
-        if (canvasRef.current) {
-          canvasRef.current.width = window.innerWidth;
-          canvasRef.current.height = window.innerHeight;
-        }
-        startCanvasLoop();
         return;
       }
       await new Promise((r) => window.setTimeout(r, 400));
     }
     setNeedsGesture(true);
-  }, [startCanvasLoop]);
+  }, []);
 
   // ---- bootstrap ----
   useEffect(() => {
@@ -713,10 +625,6 @@ function MeetAvatar() {
 
     return () => {
       cancelled = true;
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
       if (meetSilenceTimerRef.current !== null) {
         window.clearTimeout(meetSilenceTimerRef.current);
         meetSilenceTimerRef.current = null;
@@ -733,24 +641,17 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* Vídeo oculto: mantém o stream ativo para que o Recall capture o áudio.
-          O vídeo em si NÃO é exibido — o canvas abaixo desenha os frames + overlays. */}
+      {/* Avatar em tela cheia — saída direta do vídeo. É exatamente isto que o
+          Recall captura como câmera+microfone do bot na reunião. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        style={{ position: "absolute", left: "-200vw", top: 0, width: "100vw", height: "100vh", opacity: 0, pointerEvents: "none" }}
-      />
-
-      {/* Canvas: única saída visual — exibe avatar + overlays compostos pixel a pixel.
-          Não há camadas GPU separadas; o Recall captura exatamente o que está aqui. */}
-      <canvas
-        ref={canvasRef}
         onClick={() => void tryPlay()}
-        className="h-full w-full"
+        className="absolute inset-0 h-full w-full bg-black object-contain"
       />
 
-      {/* Botão de fallback para autoplay bloqueado — único elemento HTML sobre o canvas. */}
+      {/* Botão de fallback para autoplay bloqueado. */}
       {needsGesture && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70">
           <button
