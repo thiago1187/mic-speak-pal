@@ -6,7 +6,7 @@
 Todos os painéis do redesign (`Avatar_claude_design/`) estão implementados. A janela modal "Configurações" ainda existe como fallback mas toda configuração já está acessível nos painéis do canvas.
 
 **Status dos painéis:**
-- [x] Sessão do avatar (conectar, modo, destino, microfone)
+- [x] Sessão do avatar (conectar, modo, destino, microfone, mute mic, cortar escuta)
 - [x] Log verboso
 - [x] Status da sessão
 - [x] Hot-swap (anel de contagem regressiva)
@@ -37,6 +37,8 @@ Todos os painéis do redesign (`Avatar_claude_design/`) estão implementados. A 
 
 ## Concluído
 
+- [x] Mute suave do microfone (mantém pipeline STT ativo, ignora resultados)
+- [x] Cortar escuta do avatar (hard-stop do STT, botão separado no painel da sessão)
 - [x] Bento livre com drag/resize + persistência no localStorage
 - [x] Migração de toda a config do modal para painéis inline
 - [x] Hot-swap automático (reconexão antes de 5 min)

@@ -2,6 +2,12 @@
 
 ## [Não lançado]
 
+### 2026-06-21
+- **Mute do microfone (suave):** `muteMic` agora é um mute suave — mantém o pipeline Deepgram/Web Speech rodando e apenas ignora os resultados via `isMutedRef`. Desmutar é instantâneo, sem reconectar.
+- **Cortar escuta do avatar (hard-stop):** novo botão "👁 Escuta ON / 👂 Escuta OFF" no painel da sessão. Interrompe completamente o pipeline STT (para o Deepgram e Web Speech). Útil no Google Meet quando as pessoas querem conversar sem que o avatar escute.
+- **Separação clara dos dois conceitos:** mute do mic ≠ cortar escuta. O botão de mic no vídeo agora se chama "🎤 Mic ON / 🔇 Mic OFF".
+- **Fix:** `routeInterim` e `routeFinal` ignoram transcrições quando `isMutedRef.current = true`, evitando envios ao n8n enquanto mutado.
+
 ### 2026-06-19
 - **Fix:** overlay da sessão (tela cheia do avatar) ficava atrás dos painéis do bento após arrastar/redimensionar — z-index elevado para `1000` para garantir que sempre fica na frente
 
