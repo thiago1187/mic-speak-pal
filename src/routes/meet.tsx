@@ -79,8 +79,9 @@ function readConfig(): Cfg {
 function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null); // fonte de frames (off-screen)
+  const audioRef = useRef<HTMLAudioElement>(null); // áudio do avatar (entra no Meet)
+  const canvasRef = useRef<HTMLCanvasElement>(null); // única saída visual
   const rafRef = useRef<number | null>(null);
   // Diagnóstico do WebSocket de transcrição (badge sempre; painéis com ?debug=1).
   const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
@@ -430,11 +431,9 @@ function MeetAvatar() {
     return () => window.clearInterval(id);
   }, [callGetMeetListenPaused]);
 
-  // ---- canvas overlay: desenha o frame do vídeo (mesma camada) + overlays.
-  // O <video> de baixo continua visível como base — se o canvas NÃO for
-  // composto por cima do layer WebRTC no Recall, a câmera ainda funciona.
-  // Quando há frame, o canvas fica OPACO e cobre o vídeo (mostrando vídeo +
-  // overlays juntos). Sem frame, fica transparente e deixa o vídeo aparecer. ----
+  // ---- canvas = ÚNICA saída visual: desenha o frame do avatar (via drawImage,
+  // de um <video> off-screen) + overlays NA MESMA camada. Como não há <video>
+  // visível, o Recall não tem um plano de vídeo WebRTC para sobrepor os overlays. ----
   const startOverlayLoop = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -445,22 +444,15 @@ function MeetAvatar() {
       const video = videoRef.current;
       const W = canvas.width;
       const H = canvas.height;
-      const hasFrame = !!video && video.readyState >= 2 && video.videoWidth > 0;
 
-      if (hasFrame && video) {
-        // contain-fit (mesma proporção do object-contain do <video>)
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, W, H);
+      // Fundo preto + frame do avatar (contain-fit, preserva proporção).
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+      if (video && video.readyState >= 2 && video.videoWidth > 0) {
         const scale = Math.min(W / video.videoWidth, H / video.videoHeight);
         const dw = video.videoWidth * scale;
         const dh = video.videoHeight * scale;
         ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
-        canvas.style.opacity = "1"; // cobre o vídeo: mostra vídeo + overlays
-      } else {
-        ctx.clearRect(0, 0, W, H);
-        canvas.style.opacity = "0"; // deixa o <video> de baixo aparecer
-        rafRef.current = requestAnimationFrame(draw);
-        return;
       }
 
       // Badge de status (sempre)
@@ -521,20 +513,31 @@ function MeetAvatar() {
     draw();
   }, []);
 
-  // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
-  // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
-  // que o áudio do avatar seja captado e entre na reunião. ----
+  // ---- play robusto: o vídeo (off-screen) fica MUDO — só serve de fonte de
+  // frames pro canvas. O ÁUDIO do avatar sai pelo <audio> separado (sem mute),
+  // que é o que o Recall capta e manda pra reunião. ----
   const tryPlay = useCallback(async () => {
     const v = videoRef.current;
     if (!v) return;
-    v.muted = false;
+    v.muted = true; // áudio vai pelo <audio>; vídeo é só fonte de frames
     v.autoplay = true;
     v.playsInline = true;
+    const a = audioRef.current;
     for (let i = 0; i < 12; i++) {
       try {
         await v.play();
       } catch {
         // autoplay pode ser bloqueado por um instante; tenta de novo
+      }
+      // Espelha o stream do vídeo no elemento de áudio e toca (sem mute).
+      if (a && v.srcObject && a.srcObject !== v.srcObject) {
+        a.srcObject = v.srcObject;
+        a.muted = false;
+      }
+      try {
+        await a?.play();
+      } catch {
+        /* idem: tenta de novo no próximo loop */
       }
       if (!v.paused) {
         setNeedsGesture(false);
@@ -567,8 +570,10 @@ function MeetAvatar() {
       log(`sessionId desta sessão: ${meetSessionIdRef.current}`);
     }
 
+    // apiKey NÃO é obrigatória na URL: o server function getSessionToken cai no
+    // process.env.HEYGEN_API_KEY (definido na Vercel) quando vem vazia.
     const missing = (
-      ["apiKey", "avatarId", "voiceId", "contextId", "webhookReuniao"] as (keyof Cfg)[]
+      ["avatarId", "voiceId", "contextId", "webhookReuniao"] as (keyof Cfg)[]
     ).filter((k) => !cfg[k]);
     if (missing.length) {
       setStatus(`config faltando na URL: ${missing.join(", ")}`);
@@ -651,9 +656,14 @@ function MeetAvatar() {
         sessionRef.current = session;
 
         session.on(SessionEvent.SESSION_STREAM_READY, () => {
-          log("stream pronto; anexando vídeo", "ok");
+          log("stream pronto; anexando vídeo (frames) + áudio", "ok");
           try {
             if (videoRef.current) session.attach(videoRef.current);
+            // Espelha o mesmo MediaStream no <audio> pra garantir o som na reunião.
+            if (audioRef.current && videoRef.current?.srcObject) {
+              audioRef.current.srcObject = videoRef.current.srcObject;
+              audioRef.current.muted = false;
+            }
           } catch (e: any) {
             log(`attach falhou: ${e?.message ?? e}`, "err");
           }
@@ -742,23 +752,26 @@ function MeetAvatar() {
   }, [fetchToken, log, tryPlay, speakAndWait]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* Avatar em tela cheia (BASE) — saída direta do vídeo. Garante que a
-          câmera sempre funciona, mesmo se o canvas não for composto por cima. */}
+    <div className="relative h-screen w-screen overflow-hidden bg-black" onClick={() => void tryPlay()}>
+      {/* Vídeo OFF-SCREEN: fonte de frames pro canvas. Fica fora da viewport pra
+          NÃO criar um plano de vídeo WebRTC que o Recall renderiza por cima dos
+          overlays. Continua decodificando (não é display:none nem opacity:0). */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        onClick={() => void tryPlay()}
-        className="absolute inset-0 h-full w-full bg-black object-contain"
+        muted
+        style={{ position: "fixed", left: "-10000px", top: 0, width: 1280, height: 720, pointerEvents: "none" }}
       />
 
-      {/* Canvas overlay — desenha o frame do vídeo + overlays na MESMA camada.
-          Fica opaco (cobre o vídeo) quando há frame; transparente sem frame. */}
+      {/* Áudio do avatar em elemento próprio (toca sempre, independente do vídeo)
+          — é o que o Recall capta e envia como microfone do bot na reunião. */}
+      <audio ref={audioRef} autoPlay />
+
+      {/* Canvas = ÚNICA saída visual: avatar (drawImage) + overlays na mesma camada. */}
       <canvas
         ref={canvasRef}
-        className="pointer-events-none absolute inset-0 h-full w-full"
-        style={{ opacity: 0 }}
+        className="absolute inset-0 h-full w-full"
       />
 
       {/* Botão de fallback para autoplay bloqueado. */}
