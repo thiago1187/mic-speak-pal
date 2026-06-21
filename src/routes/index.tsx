@@ -2173,8 +2173,10 @@ function Index() {
       recallSeenCountRef.current = 0;
       setBotStatus(`avatar no Meet (${id.slice(0, 8)}…)`);
       // Sessão HeyGen única roda na página /meet (dentro do bot Recall).
-      // Apenas atualiza a UI do painel para o estado "conectado".
+      // Atualiza a UI do painel: conectado + escuta ON (o bot já ouve a reunião).
       setConnected(true);
+      isMutedRef.current = false;
+      setMuted(false);
       log(`[CAMADA 3] ✅ Bot criado id=${id}. Avatar no Meet — sessão HeyGen única na página /meet.`, "ok");
     } catch (e) {
       logError("Recall createBot (avatar) falhou", e);
@@ -2230,6 +2232,8 @@ function Index() {
     void callSetMeetListenPaused({ data: { paused: false } });
     // Não havia sessão HeyGen local em modo Meet — só reseta o estado da UI.
     setConnected(false);
+    isMutedRef.current = true;
+    setMuted(true);
   }, [callLeaveBot, callSetMeetListenPaused, log, logError]);
 
   // Polling do transcript do Recall (CAMADA 2)

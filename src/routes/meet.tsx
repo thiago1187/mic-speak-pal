@@ -649,17 +649,20 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* Avatar ocupando a tela toda — vira a "câmera" do bot na reunião. */}
+      {/* Vídeo como camada de fundo (z-0) — o Chromium headless do Recall cria
+          uma camada de composição própria para <video> que pode ficar acima de
+          elementos seguintes no DOM. z-index explícito garante a ordem certa. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         onClick={() => void tryPlay()}
-        className="h-full w-full object-cover"
+        className="absolute inset-0 h-full w-full object-cover"
+        style={{ zIndex: 0 }}
       />
 
       {/* Status mínimo: sempre visível na câmera (confirma que o bot está ativo). */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
+      <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
         <span
           className={`h-2 w-2 rounded-full ${
             speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/30"
@@ -669,7 +672,7 @@ function MeetAvatar() {
       </div>
 
       {needsGesture && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70">
           <button
             onClick={() => void tryPlay()}
             className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
@@ -683,7 +686,7 @@ function MeetAvatar() {
       {debug && (
         <>
           {/* Painel GRANDE de diagnóstico do WebSocket — legível na câmera do bot. */}
-          <div className="absolute inset-x-0 top-0 bg-black/75 p-3 text-center">
+          <div className="absolute inset-x-0 top-0 z-10 bg-black/75 p-3 text-center">
             <div className="text-lg font-bold text-white">
               WS: <span className={wsDiag.state === "RECEBENDO" ? "text-emerald-400" : wsDiag.state === "ERRO" ? "text-red-400" : "text-amber-300"}>{wsDiag.state}</span>
               {" · "}msgs: <span className="text-white">{wsDiag.count}</span>
@@ -693,7 +696,7 @@ function MeetAvatar() {
             </div>
           </div>
 
-          <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90">
+          <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90">
             <span
               className={`h-2.5 w-2.5 rounded-full ${
                 speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/40"
@@ -704,7 +707,7 @@ function MeetAvatar() {
             <span className="text-white/60">{status}</span>
           </div>
 
-          <div className="absolute bottom-3 left-3 max-h-40 w-[28rem] max-w-[90vw] overflow-auto rounded-md bg-black/50 p-2 font-mono text-[10px] leading-snug text-white/70">
+          <div className="absolute bottom-3 left-3 z-10 max-h-40 w-[28rem] max-w-[90vw] overflow-auto rounded-md bg-black/50 p-2 font-mono text-[10px] leading-snug text-white/70">
             {logs.slice(-25).map((l, i) => (
               <div key={`${l.t}-${i}`} className={l.kind === "err" ? "text-red-300" : l.kind === "ok" ? "text-emerald-300" : ""}>
                 [{new Date(l.t).toLocaleTimeString()}] {l.msg}
