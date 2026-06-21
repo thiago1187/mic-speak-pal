@@ -3,10 +3,11 @@
 ## [Não lançado]
 
 ### 2026-06-21
-- **Mute do microfone (suave):** `muteMic` agora é um mute suave — mantém o pipeline Deepgram/Web Speech rodando e apenas ignora os resultados via `isMutedRef`. Desmutar é instantâneo, sem reconectar.
-- **Cortar escuta do avatar (hard-stop):** novo botão "👁 Escuta ON / 👂 Escuta OFF" no painel da sessão. Interrompe completamente o pipeline STT (para o Deepgram e Web Speech). Útil no Google Meet quando as pessoas querem conversar sem que o avatar escute.
-- **Separação clara dos dois conceitos:** mute do mic ≠ cortar escuta. O botão de mic no vídeo agora se chama "🎤 Mic ON / 🔇 Mic OFF".
-- **Fix:** `routeInterim` e `routeFinal` ignoram transcrições quando `isMutedRef.current = true`, evitando envios ao n8n enquanto mutado.
+- **Botão "Escuta ON/OFF":** único botão de controle de escuta no painel. Para a captura de áudio local (fecha Deepgram graciosamente + para Web Speech) sem interromper a transcrição já em andamento — a fala acumulada antes do corte ainda é enviada ao n8n normalmente.
+- **Cortar escuta no Google Meet:** ao clicar "Escuta OFF" com o bot Recall.ai ativo, o estado é propagado para a página `/meet` via server function (`setMeetListenPaused`). A página `/meet` faz polling a cada 3s e para de processar novas transcrições do Recall.ai. Fala já no buffer continua e vai para o n8n.
+- **Avatar no painel em modo Meet:** `joinMeetingWithAvatar` agora também chama `startSession()`, iniciando a sessão HeyGen localmente. O avatar aparece no painel da sessão e a escuta funciona igual ao modo local.
+- **Botão "Remover avatar":** em modo Meet, o botão de desconexão passa de "Sair do Meet" para "Remover avatar" após conectar. `leaveMeetingWithBot` agora também encerra a sessão HeyGen local.
+- **Fix:** `routeInterim` e `routeFinal` não bloqueiam mais o fluxo ao mutar — transcrição em andamento sempre vai para o n8n.
 
 ### 2026-06-19
 - **Fix:** overlay da sessão (tela cheia do avatar) ficava atrás dos painéis do bento após arrastar/redimensionar — z-index elevado para `1000` para garantir que sempre fica na frente

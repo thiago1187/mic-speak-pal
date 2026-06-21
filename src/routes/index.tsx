@@ -12,6 +12,7 @@ import {
   type VoiceOption,
 } from "@/lib/heygen.functions";
 import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/recall.functions";
+import { setMeetListenPaused } from "@/lib/listen-control.functions";
 import {
   Accordion,
   AccordionContent,
@@ -433,6 +434,7 @@ function Index() {
   const callListVoices = useServerFn(listVoices);
   const callDeepgramToken = useServerFn(getDeepgramToken);
   const callEnvStatus = useServerFn(getEnvStatus);
+  const callSetMeetListenPaused = useServerFn(setMeetListenPaused);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const meetLogEndRef = useRef<HTMLDivElement>(null);
@@ -451,7 +453,6 @@ function Index() {
   const isAvatarSpeakingRef = useRef(false);
   const isMutedRef = useRef(true);
   const shouldListenRef = useRef(false);
-  const avatarListeningPausedRef = useRef(false);
   const micPermissionGrantedRef = useRef(false);
   const bargeInRef = useRef(false);
   const meetingActiveRef = useRef(false);
@@ -595,7 +596,6 @@ function Index() {
   const [listening, setListening] = useState(false);
   const [interviewerWaiting, setInterviewerWaiting] = useState(false); // Entrevistador: aguardando a pausa longa
   const [muted, setMuted] = useState(true);
-  const [avatarListeningPaused, setAvatarListeningPaused] = useState(false);
   const [avatarSpeaking, setAvatarSpeaking] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
   const [showStartMediaButton, setShowStartMediaButton] = useState(false);
@@ -930,7 +930,6 @@ function Index() {
   const routeInterim = useCallback(
     (partial: string) => {
       if (!partial) return;
-      if (isMutedRef.current) return;
       if (isAvatarSpeakingRef.current && !bargeInRef.current) return;
       setText(partial);
       setLiveTranscript(partial);
@@ -945,7 +944,6 @@ function Index() {
   const routeFinal = useCallback(
     (done: string) => {
       if (!done) return;
-      if (isMutedRef.current) return;
       if (isAvatarSpeakingRef.current && !bargeInRef.current) {
         log(`(avatar falando, barge-in OFF) final ignorado: "${done}"`);
         return;
@@ -1328,80 +1326,39 @@ function Index() {
   }, [startDeepgram, startRecognition]);
 
   const muteMic = useCallback(() => {
-    // Mute suave: mantém o pipeline STT ativo mas ignora resultados via isMutedRef.
-    // Isso permite desmutar instantaneamente sem reconectar Deepgram/Web Speech.
     isMutedRef.current = true;
     setMuted(true);
+    shouldListenRef.current = false;
     if (micTestTimerRef.current !== null) {
       window.clearInterval(micTestTimerRef.current);
       micTestTimerRef.current = null;
       setMicTestRemaining(0);
     }
-    // Descarta fala acumulada pendente (não vai pro n8n enquanto mutado).
-    if (interviewerSilenceTimerRef.current !== null) {
-      window.clearTimeout(interviewerSilenceTimerRef.current);
-      interviewerSilenceTimerRef.current = null;
+    // Não cancela o buffer/timer de silêncio: qualquer transcrição já capturada
+    // termina o fluxo normalmente e é enviada ao n8n.
+    try {
+      recognitionRef.current?.stop();
+    } catch (error) {
+      logError("recognition.stop() falhou ao parar escuta", error);
     }
-    interviewerBufferRef.current = "";
-    setInterviewerWaiting(false);
+    // Fecha o Deepgram com elegância: recebe a transcrição final antes de encerrar.
+    stopDeepgram({ graceful: true });
     setMicState("desligado");
-    setStatus("microphone", "waiting", "Microfone mutado");
-    log("microfone mutado");
-  }, [log, setStatus]);
+    setStatus("microphone", "waiting", "Escuta desativada");
+    log("escuta desativada");
+  }, [log, logError, setStatus, stopDeepgram]);
 
   const toggleMute = useCallback(() => {
     if (muted) {
-      if (avatarListeningPausedRef.current) {
-        // Escuta cortada pelo operador: desmutar não reinicia o pipeline.
-        // O botão "Cortar escuta" deve ser usado para retomar.
-        return;
-      }
-      if (recognitionModeRef.current === "test") {
-        // Teste de mic deixou pipeline em modo "test"; reinicia em chat.
-        startListening();
-        return;
-      }
-      // Mute suave: pipeline ainda está rodando, basta liberar os resultados.
-      isMutedRef.current = false;
-      setMuted(false);
-      setMicState(listening ? "ouvindo" : "desligado");
-      setStatus("microphone", "ok", "Microfone ativo");
-      log("microfone ativado");
+      startListening();
+      // Se o bot do Meet estiver ativo, retoma a escuta lá também.
+      if (botIdRef.current) void callSetMeetListenPaused({ data: { paused: false } });
     } else {
       muteMic();
+      // Se o bot do Meet estiver ativo, corta a escuta lá também.
+      if (botIdRef.current) void callSetMeetListenPaused({ data: { paused: true } });
     }
-  }, [muted, listening, muteMic, startListening, log, setStatus]);
-
-  // "Cortar escuta do avatar": para o pipeline STT completamente.
-  // Diferente do mute do mic (suave), este é um hard-stop — pensado para momentos
-  // em que as pessoas no Meet querem conversar sem que o avatar escute nada.
-  const toggleAvatarListening = useCallback(() => {
-    if (avatarListeningPaused) {
-      // Retomar: reinicia o pipeline STT completo.
-      avatarListeningPausedRef.current = false;
-      setAvatarListeningPaused(false);
-      startListening();
-      log("escuta do avatar retomada", "ok");
-    } else {
-      // Cortar: para tudo (igual ao muteMic antigo).
-      avatarListeningPausedRef.current = true;
-      setAvatarListeningPaused(true);
-      isMutedRef.current = true;
-      setMuted(true);
-      shouldListenRef.current = false;
-      if (interviewerSilenceTimerRef.current !== null) {
-        window.clearTimeout(interviewerSilenceTimerRef.current);
-        interviewerSilenceTimerRef.current = null;
-      }
-      interviewerBufferRef.current = "";
-      setInterviewerWaiting(false);
-      try { recognitionRef.current?.stop(); } catch {}
-      stopDeepgram({ graceful: true });
-      setMicState("desligado");
-      setStatus("microphone", "waiting", "Escuta do avatar cortada");
-      log("escuta do avatar cortada");
-    }
-  }, [avatarListeningPaused, startListening, log, stopDeepgram, setStatus]);
+  }, [muted, startListening, muteMic, callSetMeetListenPaused]);
 
   const attachRoomDiagnostics = useCallback(
     (session: LiveAvatarSession) => {
@@ -1787,8 +1744,6 @@ function Index() {
     }
     sessionRef.current = null;
     setConnected(false);
-    avatarListeningPausedRef.current = false;
-    setAvatarListeningPaused(false);
     setStatus("token", "waiting", "Sem sessão (clique em Conectar avatar)");
     setStatus("session", "waiting", "Sessão encerrada pelo usuário");
     setStatus("video", "waiting", "Sem stream");
@@ -2179,14 +2134,19 @@ function Index() {
     }
   }, [callCreateBot, log, logError]);
 
-  // CAMADA 3 — cria o bot com output_media apontando pra página pública /meet,
-  // que faz o avatar aparecer e falar DENTRO da reunião. Não toca nas Camadas 1/2.
+  // CAMADA 3 — inicia a sessão do avatar localmente E cria o bot Recall.ai para
+  // transmitir o avatar para dentro da reunião. Os controles (escuta, modo, etc.)
+  // operam sobre a sessão local, independentemente do destino ser local ou Meet.
   const joinMeetingWithAvatar = useCallback(async () => {
     const s = settingsRef.current;
     // recallApiKey pode estar vazia: o servidor usa RECALL_API_KEY (.env / Vercel).
     if (!s.meetLink) { log("Recall: Link do Google Meet vazio (Configurações)", "err"); return; }
     if (!s.avatarBaseUrl) { log('Camada 3: "URL pública do avatar" vazia. Publique no Lovable e cole a URL base em Configurações.', "err"); return; }
     if (botIdRef.current) { log(`Recall: bot já ativo (${botIdRef.current})`, "info"); return; }
+    // Garante que o Meet começa com escuta ativa (reset de sessão anterior).
+    void callSetMeetListenPaused({ data: { paused: false } });
+    // Inicia a sessão do avatar localmente (aparece no painel + escuta funciona).
+    await startSession();
     setBotJoining(true);
     const launchMode = s.meetLaunchMode;
     setBotStatus(`entrando (${launchMode})…`);
@@ -2217,7 +2177,7 @@ function Index() {
     } finally {
       setBotJoining(false);
     }
-  }, [callCreateBot, log, logError]);
+  }, [callCreateBot, callSetMeetListenPaused, log, logError, startSession]);
 
   // Abre a MESMA página /meet (com ?debug=1) no navegador do usuário, pra conferir
   // visualmente se o avatar carrega — diagnóstico da tela preta na Camada 3.
@@ -2260,7 +2220,10 @@ function Index() {
     botIdRef.current = null;
     avatarInMeetRef.current = false;
     setBotStatus("");
-  }, [callLeaveBot, log, logError]);
+    // Reseta escuta do Meet para o padrão (não pausado) ao sair.
+    void callSetMeetListenPaused({ data: { paused: false } });
+    await stopSession();
+  }, [callLeaveBot, callSetMeetListenPaused, log, logError, stopSession]);
 
   // Polling do transcript do Recall (CAMADA 2)
   useEffect(() => {
@@ -3089,7 +3052,7 @@ function Index() {
                   title={muted ? "Ativar microfone" : "Mutar microfone"}
                   style={{ display: "flex", alignItems: "center", gap: 5, background: muted ? "rgba(220,38,38,.85)" : "rgba(0,0,0,.6)", backdropFilter: "blur(4px)", borderRadius: 20, padding: "3px 10px", fontFamily: "var(--mono)", fontSize: 9.5, color: "#fff", border: `1px solid ${muted ? "rgba(220,38,38,.5)" : "rgba(255,255,255,.2)"}`, cursor: "pointer", whiteSpace: "nowrap" }}
                 >
-                  {muted ? "🔇 Mic OFF" : "🎤 Mic ON"}
+                  {muted ? "🔇 Escuta OFF" : "🎤 Escuta ON"}
                 </button>
               </div>
               {/* log (esquerda) */}
@@ -3213,14 +3176,11 @@ function Index() {
                   </button>
                 ) : (
                   <button className="btn danger" onClick={bentoDestMeet ? () => void leaveMeetingWithBot() : stopSession} style={{ flex: 1, justifyContent: "center" }}>
-                    {bentoDestMeet ? "🤖 Sair do Meet" : "☎ Encerrar sessão"}
+                    {bentoDestMeet ? "🤖 Remover avatar" : "☎ Encerrar sessão"}
                   </button>
                 )}
-                <button className={`btn${!muted ? " primary" : ""}`} onClick={toggleMute} disabled={(!speechSupported && settings.sttEngine !== "deepgram") || avatarListeningPaused} title={muted ? "Ativar microfone" : "Mutar microfone"}>
-                  {muted ? "🎙 Mic OFF" : "🎤 Mic ON"}
-                </button>
-                <button className={`btn${avatarListeningPaused ? " danger" : ""}`} onClick={toggleAvatarListening} disabled={!connected} title={avatarListeningPaused ? "Retomar escuta do avatar" : "Cortar escuta do avatar"}>
-                  {avatarListeningPaused ? "👂 Escuta OFF" : "👁 Escuta ON"}
+                <button className={`btn${!muted ? " primary" : ""}`} onClick={toggleMute} disabled={!speechSupported && settings.sttEngine !== "deepgram"} title={muted ? "Ativar escuta" : "Desativar escuta"}>
+                  {muted ? "🔇 Escuta OFF" : "🎤 Escuta ON"}
                 </button>
               </div>
 

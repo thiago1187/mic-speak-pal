@@ -37,8 +37,9 @@ Todos os painéis do redesign (`Avatar_claude_design/`) estão implementados. A 
 
 ## Concluído
 
-- [x] Mute suave do microfone (mantém pipeline STT ativo, ignora resultados)
-- [x] Cortar escuta do avatar (hard-stop do STT, botão separado no painel da sessão)
+- [x] Botão "Escuta ON/OFF" — para captura local + sinaliza /meet; fluxo em andamento continua para o n8n
+- [x] Avatar no painel em modo Meet (startSession chamado em joinMeetingWithAvatar)
+- [x] Botão "Remover avatar" em modo Meet (substituiu "Sair do Meet")
 - [x] Bento livre com drag/resize + persistência no localStorage
 - [x] Migração de toda a config do modal para painéis inline
 - [x] Hot-swap automático (reconexão antes de 5 min)

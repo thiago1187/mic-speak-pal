@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentEventsEnum, LiveAvatarSession, SessionEvent } from "@heygen/liveavatar-web-sdk";
 import { getSessionToken } from "@/lib/heygen.functions";
+import { getMeetListenPaused } from "@/lib/listen-control.functions";
 
 // =====================================================================
 // CAMADA 3 — Página pública do avatar DENTRO da reunião.
@@ -77,6 +78,7 @@ function readConfig(): Cfg {
 
 function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
+  const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
   const connectedRef = useRef(false);
@@ -98,6 +100,8 @@ function MeetAvatar() {
   const handleTranscriptRef = useRef<
     ((text: string, speaker: string, isFinal: boolean) => void) | null
   >(null);
+  // Controlado pelo operador via server function: quando true, ignora transcrições novas.
+  const listenPausedRef = useRef(false);
   // No modo limpo (sem ?debug=1) NÃO guardamos logs em estado — cada setState é um
   // re-render, e dentro do navegador do Recall isso rouba CPU do encode do vídeo.
   const debugRef = useRef(false);
@@ -384,6 +388,9 @@ function MeetAvatar() {
     (rawText: string, speaker: string, isFinal: boolean) => {
       const t = (rawText ?? "").trim();
       if (!t) return;
+      // Operador cortou a escuta: ignora novos trechos. Transcrições já no buffer
+      // continuam e são enviadas ao n8n normalmente (timer/buffer intactos).
+      if (listenPausedRef.current) return;
       // ignora a própria fala do avatar (evita loop de ouvir a própria voz)
       if (speaker && /renante|renan|dante/i.test(speaker)) return;
 
@@ -415,6 +422,18 @@ function MeetAvatar() {
   useEffect(() => {
     handleTranscriptRef.current = onTranscript;
   }, [onTranscript]);
+
+  // Polling a cada 3s: verifica se o operador cortou a escuta do avatar no Meet.
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await callGetMeetListenPaused();
+        listenPausedRef.current = r.paused;
+      } catch {}
+    };
+    const id = window.setInterval(poll, 3000);
+    return () => window.clearInterval(id);
+  }, [callGetMeetListenPaused]);
 
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
   // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
