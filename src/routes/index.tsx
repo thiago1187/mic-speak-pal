@@ -3850,9 +3850,7 @@ function Index() {
           <div className="absolute inset-x-0 top-0 z-20 flex h-14 items-center justify-between gap-3 px-4">
             <div className="flex items-center gap-3">
               <span className="flex items-baseline gap-2 text-sm">
-                <span className="text-lg font-extrabold tracking-tight">
-                  <span className="text-pink-500">G</span>Zero
-                </span>
+                <img src="/GZero%20-%20Logo%20Rosa%20-%2014fev22.jpeg" alt="GZero" className="h-8 w-auto object-contain" />
                 <span className="text-white/40">·</span>
                 <span className="font-semibold">Renante</span>
                 <span className="text-white/40">·</span>

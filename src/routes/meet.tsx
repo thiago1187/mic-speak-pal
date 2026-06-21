@@ -739,7 +739,7 @@ function MeetAvatar() {
         ref={videoRef}
         autoPlay
         playsInline
-        style={{ position: "absolute", width: 0, height: 0, opacity: 0 }}
+        style={{ position: "absolute", left: "-200vw", top: 0, width: "100vw", height: "100vh", opacity: 0, pointerEvents: "none" }}
       />
 
       {/* Canvas: única saída visual — exibe avatar + overlays compostos pixel a pixel.
