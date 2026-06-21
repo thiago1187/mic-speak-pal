@@ -79,9 +79,10 @@ function readConfig(): Cfg {
 function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
-  const videoRef = useRef<HTMLVideoElement>(null); // fonte de frames (off-screen)
+  const videoRef = useRef<HTMLVideoElement>(null); // fonte de frames do HeyGen (off-screen)
   const audioRef = useRef<HTMLAudioElement>(null); // áudio do avatar (entra no Meet)
-  const canvasRef = useRef<HTMLCanvasElement>(null); // única saída visual
+  const canvasRef = useRef<HTMLCanvasElement>(null); // compositor avatar+overlays (escondido)
+  const outVideoRef = useRef<HTMLVideoElement>(null); // saída VISÍVEL (o Recall capta este)
   const rafRef = useRef<number | null>(null);
   // Diagnóstico do WebSocket de transcrição (badge sempre; painéis com ?debug=1).
   const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
@@ -513,13 +514,31 @@ function MeetAvatar() {
     draw();
   }, []);
 
-  // ---- play robusto: o vídeo (off-screen) fica MUDO — só serve de fonte de
-  // frames pro canvas. O ÁUDIO do avatar sai pelo <audio> separado (sem mute),
-  // que é o que o Recall capta e manda pra reunião. ----
+  // ---- liga o canvas (avatar+overlays) ao <video> VISÍVEL via captureStream.
+  // O Recall capta o <video> de saída — então os overlays vão "queimados" no
+  // stream. Áudio continua pelo <audio> separado; o out fica mudo (sem eco). ----
+  const wireOutput = useCallback(() => {
+    const canvas = canvasRef.current;
+    const out = outVideoRef.current;
+    if (!canvas || !out || out.srcObject) return;
+    try {
+      const stream = canvas.captureStream(30); // vídeo composto, 30fps
+      out.srcObject = stream;
+      out.muted = true; // áudio sai pelo <audio>
+      void out.play().catch(() => {});
+      log("saída composta (canvas → captureStream) ligada ao vídeo visível", "ok");
+    } catch (e: any) {
+      log(`captureStream falhou: ${e?.message ?? e}`, "err");
+    }
+  }, [log]);
+
+  // ---- play robusto: o vídeo-fonte (off-screen) fica MUDO — só alimenta o
+  // canvas. O ÁUDIO do avatar sai pelo <audio> separado (sem mute), captado
+  // pelo Recall. O <video> de saída exibe o canvas composto. ----
   const tryPlay = useCallback(async () => {
     const v = videoRef.current;
     if (!v) return;
-    v.muted = true; // áudio vai pelo <audio>; vídeo é só fonte de frames
+    v.muted = true; // áudio vai pelo <audio>; vídeo-fonte é só frames
     v.autoplay = true;
     v.playsInline = true;
     const a = audioRef.current;
@@ -541,17 +560,14 @@ function MeetAvatar() {
       }
       if (!v.paused) {
         setNeedsGesture(false);
-        if (canvasRef.current) {
-          canvasRef.current.width = window.innerWidth;
-          canvasRef.current.height = window.innerHeight;
-        }
-        startOverlayLoop();
+        startOverlayLoop(); // desenha avatar+overlays no canvas (1280x720)
+        wireOutput(); // canvas → captureStream → <video> visível
         return;
       }
       await new Promise((r) => window.setTimeout(r, 400));
     }
     setNeedsGesture(true);
-  }, [startOverlayLoop]);
+  }, [startOverlayLoop, wireOutput]);
 
   // ---- bootstrap ----
   useEffect(() => {
@@ -753,9 +769,8 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black" onClick={() => void tryPlay()}>
-      {/* Vídeo OFF-SCREEN: fonte de frames pro canvas. Fica fora da viewport pra
-          NÃO criar um plano de vídeo WebRTC que o Recall renderiza por cima dos
-          overlays. Continua decodificando (não é display:none nem opacity:0). */}
+      {/* Vídeo-FONTE off-screen: recebe o stream do HeyGen só p/ alimentar o
+          canvas (drawImage). Não é exibido. */}
       <video
         ref={videoRef}
         autoPlay
@@ -764,14 +779,22 @@ function MeetAvatar() {
         style={{ position: "fixed", left: "-10000px", top: 0, width: 1280, height: 720, pointerEvents: "none" }}
       />
 
-      {/* Áudio do avatar em elemento próprio (toca sempre, independente do vídeo)
-          — é o que o Recall capta e envia como microfone do bot na reunião. */}
+      {/* Áudio do avatar em elemento próprio — é o que o Recall capta e envia
+          como microfone do bot na reunião. */}
       <audio ref={audioRef} autoPlay />
 
-      {/* Canvas = ÚNICA saída visual: avatar (drawImage) + overlays na mesma camada. */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 h-full w-full"
+      {/* Canvas COMPOSITOR (escondido): desenha avatar + overlays a 1280x720.
+          Vira stream via captureStream() e alimenta o vídeo de saída. */}
+      <canvas ref={canvasRef} width={1280} height={720} style={{ display: "none" }} />
+
+      {/* Vídeo de SAÍDA (visível) — toca o stream composto do canvas. É ESTE
+          que o Recall captura como câmera, já com os overlays embutidos. */}
+      <video
+        ref={outVideoRef}
+        autoPlay
+        playsInline
+        muted
+        className="absolute inset-0 h-full w-full bg-black object-contain"
       />
 
       {/* Botão de fallback para autoplay bloqueado. */}
