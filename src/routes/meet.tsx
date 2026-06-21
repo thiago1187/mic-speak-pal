@@ -79,12 +79,8 @@ function readConfig(): Cfg {
 function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
-  const videoRef = useRef<HTMLVideoElement>(null); // fonte de frames do HeyGen (off-screen)
-  const audioRef = useRef<HTMLAudioElement>(null); // áudio do avatar (entra no Meet)
-  const canvasRef = useRef<HTMLCanvasElement>(null); // compositor avatar+overlays (escondido)
-  const outVideoRef = useRef<HTMLVideoElement>(null); // saída VISÍVEL (o Recall capta este)
-  const rafRef = useRef<number | null>(null);
-  // Diagnóstico do WebSocket de transcrição (badge sempre; painéis com ?debug=1).
+  const videoRef = useRef<HTMLVideoElement>(null);
+  // Diagnóstico do WebSocket de transcrição (só com ?debug=1, via console).
   const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
   const logsRef = useRef<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -432,142 +428,29 @@ function MeetAvatar() {
     return () => window.clearInterval(id);
   }, [callGetMeetListenPaused]);
 
-  // ---- canvas = ÚNICA saída visual: desenha o frame do avatar (via drawImage,
-  // de um <video> off-screen) + overlays NA MESMA camada. Como não há <video>
-  // visível, o Recall não tem um plano de vídeo WebRTC para sobrepor os overlays. ----
-  const startOverlayLoop = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const draw = () => {
-      const video = videoRef.current;
-      const W = canvas.width;
-      const H = canvas.height;
-
-      // Fundo preto + frame do avatar (contain-fit, preserva proporção).
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, W, H);
-      if (video && video.readyState >= 2 && video.videoWidth > 0) {
-        const scale = Math.min(W / video.videoWidth, H / video.videoHeight);
-        const dw = video.videoWidth * scale;
-        const dh = video.videoHeight * scale;
-        ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
-      }
-
-      // Badge de status (sempre)
-      const isSpeaking = isAvatarSpeakingRef.current;
-      const isActive = meetingActiveRef.current;
-      const label = isSpeaking ? "falando…" : isActive ? "ativo" : "ouvindo";
-      const dotColor = isSpeaking ? "#fbbf24" : isActive ? "#34d399" : "rgba(255,255,255,0.4)";
-      ctx.font = "bold 13px sans-serif";
-      const tw = ctx.measureText(label).width;
-      const bw = 26 + tw;
-      const bh = 26;
-      const bx = 12;
-      const by = H - bh - 12;
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.beginPath();
-      ctx.roundRect(bx, by, bw, bh, 6);
-      ctx.fill();
-      ctx.fillStyle = dotColor;
-      ctx.beginPath();
-      ctx.arc(bx + 11, by + bh / 2, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(label, bx + 20, by + bh / 2 + 4.5);
-
-      // Painéis de diagnóstico — só com ?debug=1
-      if (debugRef.current) {
-        const d = wsDiagRef.current;
-        ctx.fillStyle = "rgba(0,0,0,0.78)";
-        ctx.fillRect(0, 0, W, 54);
-        ctx.font = "bold 16px sans-serif";
-        ctx.fillStyle = d.state === "RECEBENDO" ? "#34d399" : d.state === "ERRO" ? "#f87171" : "#fcd34d";
-        ctx.fillText(`WS: ${d.state}  ·  msgs: ${d.count}`, 12, 24);
-        ctx.font = "11px monospace";
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.fillText(`última: ${d.last.slice(0, 120) || "(nenhuma)"}`, 12, 44);
-
-        const logLines = logsRef.current.slice(-15);
-        const lineH = 14;
-        const logPanelH = logLines.length * lineH + 10;
-        const lpy = by - 18 - logPanelH;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(10, lpy, W - 20, logPanelH);
-        ctx.font = "10px monospace";
-        logLines.forEach((l, i) => {
-          ctx.fillStyle = l.kind === "err" ? "#fca5a5" : l.kind === "ok" ? "#6ee7b7" : "rgba(255,255,255,0.65)";
-          ctx.fillText(
-            `[${new Date(l.t).toLocaleTimeString()}] ${l.msg}`.slice(0, 100),
-            14,
-            lpy + 8 + (i + 1) * lineH,
-          );
-        });
-      }
-
-      rafRef.current = requestAnimationFrame(draw);
-    };
-
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    draw();
-  }, []);
-
-  // ---- liga o canvas (avatar+overlays) ao <video> VISÍVEL via captureStream.
-  // O Recall capta o <video> de saída — então os overlays vão "queimados" no
-  // stream. Áudio continua pelo <audio> separado; o out fica mudo (sem eco). ----
-  const wireOutput = useCallback(() => {
-    const canvas = canvasRef.current;
-    const out = outVideoRef.current;
-    if (!canvas || !out || out.srcObject) return;
-    try {
-      const stream = canvas.captureStream(30); // vídeo composto, 30fps
-      out.srcObject = stream;
-      out.muted = true; // áudio sai pelo <audio>
-      void out.play().catch(() => {});
-      log("saída composta (canvas → captureStream) ligada ao vídeo visível", "ok");
-    } catch (e: any) {
-      log(`captureStream falhou: ${e?.message ?? e}`, "err");
-    }
-  }, [log]);
-
-  // ---- play robusto: o vídeo-fonte (off-screen) fica MUDO — só alimenta o
-  // canvas. O ÁUDIO do avatar sai pelo <audio> separado (sem mute), captado
-  // pelo Recall. O <video> de saída exibe o canvas composto. ----
+  // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
+  // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
+  // que o áudio do avatar seja captado e entre na reunião. ----
   const tryPlay = useCallback(async () => {
     const v = videoRef.current;
     if (!v) return;
-    v.muted = true; // áudio vai pelo <audio>; vídeo-fonte é só frames
+    v.muted = false;
     v.autoplay = true;
     v.playsInline = true;
-    const a = audioRef.current;
     for (let i = 0; i < 12; i++) {
       try {
         await v.play();
       } catch {
         // autoplay pode ser bloqueado por um instante; tenta de novo
       }
-      // Espelha o stream do vídeo no elemento de áudio e toca (sem mute).
-      if (a && v.srcObject && a.srcObject !== v.srcObject) {
-        a.srcObject = v.srcObject;
-        a.muted = false;
-      }
-      try {
-        await a?.play();
-      } catch {
-        /* idem: tenta de novo no próximo loop */
-      }
       if (!v.paused) {
         setNeedsGesture(false);
-        startOverlayLoop(); // desenha avatar+overlays no canvas (1280x720)
-        wireOutput(); // canvas → captureStream → <video> visível
         return;
       }
       await new Promise((r) => window.setTimeout(r, 400));
     }
     setNeedsGesture(true);
-  }, [startOverlayLoop, wireOutput]);
+  }, []);
 
   // ---- bootstrap ----
   useEffect(() => {
@@ -672,14 +555,9 @@ function MeetAvatar() {
         sessionRef.current = session;
 
         session.on(SessionEvent.SESSION_STREAM_READY, () => {
-          log("stream pronto; anexando vídeo (frames) + áudio", "ok");
+          log("stream pronto; anexando vídeo", "ok");
           try {
             if (videoRef.current) session.attach(videoRef.current);
-            // Espelha o mesmo MediaStream no <audio> pra garantir o som na reunião.
-            if (audioRef.current && videoRef.current?.srcObject) {
-              audioRef.current.srcObject = videoRef.current.srcObject;
-              audioRef.current.muted = false;
-            }
           } catch (e: any) {
             log(`attach falhou: ${e?.message ?? e}`, "err");
           }
@@ -749,10 +627,6 @@ function MeetAvatar() {
 
     return () => {
       cancelled = true;
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
       if (meetSilenceTimerRef.current !== null) {
         window.clearTimeout(meetSilenceTimerRef.current);
         meetSilenceTimerRef.current = null;
@@ -768,32 +642,14 @@ function MeetAvatar() {
   }, [fetchToken, log, tryPlay, speakAndWait]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-black" onClick={() => void tryPlay()}>
-      {/* Vídeo-FONTE off-screen: recebe o stream do HeyGen só p/ alimentar o
-          canvas (drawImage). Não é exibido. */}
+    <div className="relative h-screen w-screen overflow-hidden bg-black">
+      {/* Avatar em tela cheia — saída direta do vídeo. É exatamente isto que o
+          Recall captura como câmera+microfone do bot na reunião. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        muted
-        style={{ position: "fixed", left: "-10000px", top: 0, width: 1280, height: 720, pointerEvents: "none" }}
-      />
-
-      {/* Áudio do avatar em elemento próprio — é o que o Recall capta e envia
-          como microfone do bot na reunião. */}
-      <audio ref={audioRef} autoPlay />
-
-      {/* Canvas COMPOSITOR (escondido): desenha avatar + overlays a 1280x720.
-          Vira stream via captureStream() e alimenta o vídeo de saída. */}
-      <canvas ref={canvasRef} width={1280} height={720} style={{ display: "none" }} />
-
-      {/* Vídeo de SAÍDA (visível) — toca o stream composto do canvas. É ESTE
-          que o Recall captura como câmera, já com os overlays embutidos. */}
-      <video
-        ref={outVideoRef}
-        autoPlay
-        playsInline
-        muted
+        onClick={() => void tryPlay()}
         className="absolute inset-0 h-full w-full bg-black object-contain"
       />
 
