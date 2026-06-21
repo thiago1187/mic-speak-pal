@@ -649,8 +649,7 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* SÓ o avatar, ocupando a tela toda — vira a "câmera" do bot na reunião.
-          onClick é só fallback p/ humano (autoplay com áudio bloqueado). */}
+      {/* Avatar ocupando a tela toda — vira a "câmera" do bot na reunião. */}
       <video
         ref={videoRef}
         autoPlay
@@ -659,7 +658,28 @@ function MeetAvatar() {
         className="h-full w-full object-cover"
       />
 
-      {/* Tudo abaixo é APENAS no modo de depuração (?debug=1). Na reunião fica limpo. */}
+      {/* Status mínimo: sempre visível na câmera (confirma que o bot está ativo). */}
+      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/50 px-2 py-1 text-xs text-white/80">
+        <span
+          className={`h-2 w-2 rounded-full ${
+            speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/30"
+          }`}
+        />
+        <span>{speaking ? "falando…" : active ? "ativo" : "ouvindo"}</span>
+      </div>
+
+      {needsGesture && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+          <button
+            onClick={() => void tryPlay()}
+            className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
+          >
+            ▶️ Iniciar avatar
+          </button>
+        </div>
+      )}
+
+      {/* Diagnóstico completo — só com ?debug=1. */}
       {debug && (
         <>
           {/* Painel GRANDE de diagnóstico do WebSocket — legível na câmera do bot. */}
@@ -672,17 +692,6 @@ function MeetAvatar() {
               última: {wsDiag.last || "(nenhuma)"}
             </div>
           </div>
-
-          {needsGesture && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-              <button
-                onClick={() => void tryPlay()}
-                className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
-              >
-                ▶️ Iniciar avatar
-              </button>
-            </div>
-          )}
 
           <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90">
             <span
