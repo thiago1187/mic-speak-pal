@@ -80,7 +80,9 @@ function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
   const videoRef = useRef<HTMLVideoElement>(null);
-  // Diagnóstico do WebSocket de transcrição (só com ?debug=1, via console).
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef<number | null>(null);
+  // Diagnóstico do WebSocket de transcrição (badge sempre; painéis com ?debug=1).
   const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
   const logsRef = useRef<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
@@ -428,6 +430,97 @@ function MeetAvatar() {
     return () => window.clearInterval(id);
   }, [callGetMeetListenPaused]);
 
+  // ---- canvas overlay: desenha o frame do vídeo (mesma camada) + overlays.
+  // O <video> de baixo continua visível como base — se o canvas NÃO for
+  // composto por cima do layer WebRTC no Recall, a câmera ainda funciona.
+  // Quando há frame, o canvas fica OPACO e cobre o vídeo (mostrando vídeo +
+  // overlays juntos). Sem frame, fica transparente e deixa o vídeo aparecer. ----
+  const startOverlayLoop = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const draw = () => {
+      const video = videoRef.current;
+      const W = canvas.width;
+      const H = canvas.height;
+      const hasFrame = !!video && video.readyState >= 2 && video.videoWidth > 0;
+
+      if (hasFrame && video) {
+        // contain-fit (mesma proporção do object-contain do <video>)
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, W, H);
+        const scale = Math.min(W / video.videoWidth, H / video.videoHeight);
+        const dw = video.videoWidth * scale;
+        const dh = video.videoHeight * scale;
+        ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
+        canvas.style.opacity = "1"; // cobre o vídeo: mostra vídeo + overlays
+      } else {
+        ctx.clearRect(0, 0, W, H);
+        canvas.style.opacity = "0"; // deixa o <video> de baixo aparecer
+        rafRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      // Badge de status (sempre)
+      const isSpeaking = isAvatarSpeakingRef.current;
+      const isActive = meetingActiveRef.current;
+      const label = isSpeaking ? "falando…" : isActive ? "ativo" : "ouvindo";
+      const dotColor = isSpeaking ? "#fbbf24" : isActive ? "#34d399" : "rgba(255,255,255,0.4)";
+      ctx.font = "bold 13px sans-serif";
+      const tw = ctx.measureText(label).width;
+      const bw = 26 + tw;
+      const bh = 26;
+      const bx = 12;
+      const by = H - bh - 12;
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 6);
+      ctx.fill();
+      ctx.fillStyle = dotColor;
+      ctx.beginPath();
+      ctx.arc(bx + 11, by + bh / 2, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillText(label, bx + 20, by + bh / 2 + 4.5);
+
+      // Painéis de diagnóstico — só com ?debug=1
+      if (debugRef.current) {
+        const d = wsDiagRef.current;
+        ctx.fillStyle = "rgba(0,0,0,0.78)";
+        ctx.fillRect(0, 0, W, 54);
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = d.state === "RECEBENDO" ? "#34d399" : d.state === "ERRO" ? "#f87171" : "#fcd34d";
+        ctx.fillText(`WS: ${d.state}  ·  msgs: ${d.count}`, 12, 24);
+        ctx.font = "11px monospace";
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.fillText(`última: ${d.last.slice(0, 120) || "(nenhuma)"}`, 12, 44);
+
+        const logLines = logsRef.current.slice(-15);
+        const lineH = 14;
+        const logPanelH = logLines.length * lineH + 10;
+        const lpy = by - 18 - logPanelH;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(10, lpy, W - 20, logPanelH);
+        ctx.font = "10px monospace";
+        logLines.forEach((l, i) => {
+          ctx.fillStyle = l.kind === "err" ? "#fca5a5" : l.kind === "ok" ? "#6ee7b7" : "rgba(255,255,255,0.65)";
+          ctx.fillText(
+            `[${new Date(l.t).toLocaleTimeString()}] ${l.msg}`.slice(0, 100),
+            14,
+            lpy + 8 + (i + 1) * lineH,
+          );
+        });
+      }
+
+      rafRef.current = requestAnimationFrame(draw);
+    };
+
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    draw();
+  }, []);
+
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
   // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
   // que o áudio do avatar seja captado e entre na reunião. ----
@@ -445,12 +538,17 @@ function MeetAvatar() {
       }
       if (!v.paused) {
         setNeedsGesture(false);
+        if (canvasRef.current) {
+          canvasRef.current.width = window.innerWidth;
+          canvasRef.current.height = window.innerHeight;
+        }
+        startOverlayLoop();
         return;
       }
       await new Promise((r) => window.setTimeout(r, 400));
     }
     setNeedsGesture(true);
-  }, []);
+  }, [startOverlayLoop]);
 
   // ---- bootstrap ----
   useEffect(() => {
@@ -625,6 +723,10 @@ function MeetAvatar() {
 
     return () => {
       cancelled = true;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       if (meetSilenceTimerRef.current !== null) {
         window.clearTimeout(meetSilenceTimerRef.current);
         meetSilenceTimerRef.current = null;
@@ -641,14 +743,22 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* Avatar em tela cheia — saída direta do vídeo. É exatamente isto que o
-          Recall captura como câmera+microfone do bot na reunião. */}
+      {/* Avatar em tela cheia (BASE) — saída direta do vídeo. Garante que a
+          câmera sempre funciona, mesmo se o canvas não for composto por cima. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         onClick={() => void tryPlay()}
         className="absolute inset-0 h-full w-full bg-black object-contain"
+      />
+
+      {/* Canvas overlay — desenha o frame do vídeo + overlays na MESMA camada.
+          Fica opaco (cobre o vídeo) quando há frame; transparente sem frame. */}
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        style={{ opacity: 0 }}
       />
 
       {/* Botão de fallback para autoplay bloqueado. */}
