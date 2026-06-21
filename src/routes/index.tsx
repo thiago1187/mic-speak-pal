@@ -112,7 +112,7 @@ const DEFAULT_SETTINGS: Settings = {
   language: "pt",
   meetLink: "",
   recallApiKey: "",
-  avatarBaseUrl: "",
+  avatarBaseUrl: "https://mic-speak-pal.vercel.app",
   posterUrl: "",
   captionsEnabled: true,
   meetLaunchMode: "reuniao",
