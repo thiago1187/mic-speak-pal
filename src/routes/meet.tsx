@@ -80,6 +80,11 @@ function MeetAvatar() {
   const fetchToken = useServerFn(getSessionToken);
   const callGetMeetListenPaused = useServerFn(getMeetListenPaused);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef<number | null>(null);
+  // Refs lidas a cada frame do canvas (sem re-render)
+  const wsDiagRef = useRef({ state: "—", count: 0, last: "" });
+  const logsRef = useRef<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const sessionRef = useRef<LiveAvatarSession | null>(null);
   const connectedRef = useRef(false);
   const isAvatarSpeakingRef = useRef(false);
@@ -102,30 +107,20 @@ function MeetAvatar() {
   >(null);
   // Controlado pelo operador via server function: quando true, ignora transcrições novas.
   const listenPausedRef = useRef(false);
-  // No modo limpo (sem ?debug=1) NÃO guardamos logs em estado — cada setState é um
-  // re-render, e dentro do navegador do Recall isso rouba CPU do encode do vídeo.
   const debugRef = useRef(false);
 
-  const [logs, setLogs] = useState<{ t: number; msg: string; kind?: "info" | "err" | "ok" }[]>([]);
   const [status, setStatus] = useState("inicializando…");
   const [speaking, setSpeaking] = useState(false);
   const [active, setActive] = useState(false);
   const [needsGesture, setNeedsGesture] = useState(false);
-  // Por padrão a página é LIMPA (só o avatar, cara de câmera). HUD/logs só com ?debug=1.
-  const [debug, setDebug] = useState(false);
-  // Diagnóstico do WebSocket de transcrição (só atualizado/mostrado no modo debug).
-  const [wsDiag, setWsDiag] = useState<{ state: string; count: number; last: string }>({
-    state: "—",
-    count: 0,
-    last: "",
-  });
 
   const log = useCallback((msg: string, kind: "info" | "err" | "ok" = "info") => {
     const line = `${new Date().toISOString()} [MEET] ${msg}`;
     if (kind === "err") console.error(line);
     else console.log(line);
-    // Só acumula em estado (e re-renderiza) quando o painel de debug está visível.
-    if (debugRef.current) setLogs((p) => [...p, { t: Date.now(), msg, kind }].slice(-200));
+    if (debugRef.current) {
+      logsRef.current = [...logsRef.current, { t: Date.now(), msg, kind }].slice(-200);
+    }
   }, []);
 
   // ---- fila de fala (espera speak_ended antes da próxima) ----
@@ -435,6 +430,86 @@ function MeetAvatar() {
     return () => window.clearInterval(id);
   }, [callGetMeetListenPaused]);
 
+  // ---- loop de canvas: desenha frame do vídeo + overlays a cada animationFrame ----
+  const startCanvasLoop = useCallback(() => {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const draw = () => {
+      const W = canvas.width;
+      const H = canvas.height;
+
+      // Frame do vídeo
+      if (video.readyState >= 2) {
+        ctx.drawImage(video, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Badge de status (sempre visível)
+      const isSpeaking = isAvatarSpeakingRef.current;
+      const isActive = meetingActiveRef.current;
+      const label = isSpeaking ? "falando…" : isActive ? "ativo" : "ouvindo";
+      const dotColor = isSpeaking ? "#fbbf24" : isActive ? "#34d399" : "rgba(255,255,255,0.3)";
+      ctx.font = "bold 13px sans-serif";
+      const tw = ctx.measureText(label).width;
+      const bw = 14 + tw + 10;
+      const bh = 24;
+      const bx = 10;
+      const by = H - bh - 10;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 5);
+      ctx.fill();
+      ctx.fillStyle = dotColor;
+      ctx.beginPath();
+      ctx.arc(bx + 9, by + bh / 2, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillText(label, bx + 17, by + bh / 2 + 5);
+
+      // Diagnóstico — só com ?debug=1
+      if (debugRef.current) {
+        const d = wsDiagRef.current;
+        // Painel superior
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillRect(0, 0, W, 54);
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = d.state === "RECEBENDO" ? "#34d399" : d.state === "ERRO" ? "#f87171" : "#fcd34d";
+        ctx.fillText(`WS: ${d.state}  ·  msgs: ${d.count}`, 12, 24);
+        ctx.font = "11px monospace";
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.fillText(`última: ${d.last.slice(0, 120) || "(nenhuma)"}`, 12, 44);
+
+        // Log — painel inferior
+        const logLines = logsRef.current.slice(-15);
+        const lineH = 14;
+        const logPanelH = logLines.length * lineH + 10;
+        const lpy = H - bh - 18 - logPanelH;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(10, lpy, W - 20, logPanelH);
+        ctx.font = "10px monospace";
+        logLines.forEach((l, i) => {
+          ctx.fillStyle = l.kind === "err" ? "#fca5a5" : l.kind === "ok" ? "#6ee7b7" : "rgba(255,255,255,0.65)";
+          ctx.fillText(
+            `[${new Date(l.t).toLocaleTimeString()}] ${l.msg}`.slice(0, 100),
+            14,
+            lpy + 8 + (i + 1) * lineH,
+          );
+        });
+      }
+
+      rafRef.current = requestAnimationFrame(draw);
+    };
+
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    draw();
+  }, []);
+
   // ---- play do vídeo: robusto, tenta várias vezes (Recall autoplaya, mas
   // o stream pode chegar com um pequeno atraso). Precisa ficar SEM mute pra
   // que o áudio do avatar seja captado e entre na reunião. ----
@@ -452,12 +527,18 @@ function MeetAvatar() {
       }
       if (!v.paused) {
         setNeedsGesture(false);
+        // Dimensiona canvas para preencher a viewport e inicia o loop de composição.
+        if (canvasRef.current) {
+          canvasRef.current.width = window.innerWidth;
+          canvasRef.current.height = window.innerHeight;
+        }
+        startCanvasLoop();
         return;
       }
       await new Promise((r) => window.setTimeout(r, 400));
     }
     setNeedsGesture(true);
-  }, []);
+  }, [startCanvasLoop]);
 
   // ---- bootstrap ----
   useEffect(() => {
@@ -465,7 +546,6 @@ function MeetAvatar() {
     cfgRef.current = cfg;
     const isDebug = new URLSearchParams(window.location.search).get("debug") === "1";
     debugRef.current = isDebug;
-    setDebug(isDebug);
 
     // sessionId único desta sessão de /meet (gerado uma vez, estável enquanto durar).
     if (!meetSessionIdRef.current) {
@@ -494,25 +574,25 @@ function MeetAvatar() {
         wsRef.current = ws;
         ws.onopen = () => {
           log("WebSocket de transcrição do Recall conectado", "ok");
-          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "CONECTADO" }));
+          if (debugRef.current) wsDiagRef.current = { ...wsDiagRef.current, state: "CONECTADO" };
         };
         ws.onerror = (e) => {
           log(`WebSocket erro: ${JSON.stringify(e)?.slice(0, 200)}`, "err");
-          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "ERRO" }));
+          if (debugRef.current) wsDiagRef.current = { ...wsDiagRef.current, state: "ERRO" };
         };
         ws.onclose = () => {
           log("WebSocket fechado; reconectando em 3s");
-          if (debugRef.current) setWsDiag((d) => ({ ...d, state: "FECHADO (reconectando)" }));
+          if (debugRef.current) wsDiagRef.current = { ...wsDiagRef.current, state: "FECHADO (reconectando)" };
           if (!cancelled) window.setTimeout(connectWs, 3000);
         };
         ws.onmessage = (event) => {
           // Captura a mensagem CRUA pra diagnóstico (confirma o schema real).
           if (debugRef.current) {
-            setWsDiag((d) => ({
+            wsDiagRef.current = {
               state: "RECEBENDO",
-              count: d.count + 1,
+              count: wsDiagRef.current.count + 1,
               last: String(event.data).slice(0, 300),
-            }));
+            };
           }
           let parsed: any = null;
           try {
@@ -633,6 +713,10 @@ function MeetAvatar() {
 
     return () => {
       cancelled = true;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       if (meetSilenceTimerRef.current !== null) {
         window.clearTimeout(meetSilenceTimerRef.current);
         meetSilenceTimerRef.current = null;
@@ -649,39 +733,26 @@ function MeetAvatar() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-black">
-      {/* Vídeo como camada de fundo.
-          Streams WebRTC (HeyGen) são promovidos a camada GPU própria no Chromium,
-          que pode ficar ACIMA de divs com z-index maior via compositor.
-          Solução: overlays também recebem will-change+translateZ para serem
-          promovidos a camadas GPU APÓS o vídeo — garantindo a ordem correta
-          tanto no render DOM quanto no compositor do headless Chromium do Recall. */}
+      {/* Vídeo oculto: mantém o stream ativo para que o Recall capture o áudio.
+          O vídeo em si NÃO é exibido — o canvas abaixo desenha os frames + overlays. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        onClick={() => void tryPlay()}
-        className="absolute inset-0 h-full w-full object-cover"
-        style={{ zIndex: 0 }}
+        style={{ position: "absolute", width: 0, height: 0, opacity: 0 }}
       />
 
-      {/* Status mínimo: sempre visível na câmera (confirma que o bot está ativo). */}
-      <div
-        className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-black/50 px-2 py-1 text-xs text-white/80"
-        style={{ zIndex: 10, willChange: "transform", transform: "translateZ(0)" }}
-      >
-        <span
-          className={`h-2 w-2 rounded-full ${
-            speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/30"
-          }`}
-        />
-        <span>{speaking ? "falando…" : active ? "ativo" : "ouvindo"}</span>
-      </div>
+      {/* Canvas: única saída visual — exibe avatar + overlays compostos pixel a pixel.
+          Não há camadas GPU separadas; o Recall captura exatamente o que está aqui. */}
+      <canvas
+        ref={canvasRef}
+        onClick={() => void tryPlay()}
+        className="h-full w-full"
+      />
 
+      {/* Botão de fallback para autoplay bloqueado — único elemento HTML sobre o canvas. */}
       {needsGesture && (
-        <div
-          className="absolute inset-0 flex items-center justify-center bg-black/70"
-          style={{ zIndex: 20, willChange: "transform", transform: "translateZ(0)" }}
-        >
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70">
           <button
             onClick={() => void tryPlay()}
             className="rounded-md bg-white px-6 py-3 text-lg font-semibold text-black"
@@ -689,50 +760,6 @@ function MeetAvatar() {
             ▶️ Iniciar avatar
           </button>
         </div>
-      )}
-
-      {/* Diagnóstico completo — só com ?debug=1. */}
-      {debug && (
-        <>
-          {/* Painel GRANDE de diagnóstico do WebSocket — legível na câmera do bot. */}
-          <div
-            className="absolute inset-x-0 top-0 bg-black/75 p-3 text-center"
-            style={{ zIndex: 10, willChange: "transform", transform: "translateZ(0)" }}
-          >
-            <div className="text-lg font-bold text-white">
-              WS: <span className={wsDiag.state === "RECEBENDO" ? "text-emerald-400" : wsDiag.state === "ERRO" ? "text-red-400" : "text-amber-300"}>{wsDiag.state}</span>
-              {" · "}msgs: <span className="text-white">{wsDiag.count}</span>
-            </div>
-            <div className="mx-auto mt-1 max-w-[95%] truncate font-mono text-xs text-white/80">
-              última: {wsDiag.last || "(nenhuma)"}
-            </div>
-          </div>
-
-          <div
-            className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-black/50 px-3 py-1.5 text-xs text-white/90"
-            style={{ zIndex: 10, willChange: "transform", transform: "translateZ(0)" }}
-          >
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${
-                speaking ? "bg-amber-400" : active ? "bg-emerald-400" : "bg-white/40"
-              }`}
-            />
-            <span>{speaking ? "falando…" : active ? "ativo" : "ouvindo"}</span>
-            <span className="text-white/50">·</span>
-            <span className="text-white/60">{status}</span>
-          </div>
-
-          <div
-            className="absolute bottom-3 left-3 max-h-40 w-[28rem] max-w-[90vw] overflow-auto rounded-md bg-black/50 p-2 font-mono text-[10px] leading-snug text-white/70"
-            style={{ zIndex: 10, willChange: "transform", transform: "translateZ(0)" }}
-          >
-            {logs.slice(-25).map((l, i) => (
-              <div key={`${l.t}-${i}`} className={l.kind === "err" ? "text-red-300" : l.kind === "ok" ? "text-emerald-300" : ""}>
-                [{new Date(l.t).toLocaleTimeString()}] {l.msg}
-              </div>
-            ))}
-          </div>
-        </>
       )}
     </div>
   );
