@@ -3169,12 +3169,9 @@ function Index() {
       )}
 
       {/* ── bento grid ── */}
-      {/* Em tela cheia, o console fica oculto (display:none): para de pintar os
-          10 painéis/LEDs/log atrás do overlay, economizando GPU/CPU. Os refs e
-          o stream do avatar continuam vivos (videoRef segue montado p/ hot-swap). */}
       <div
         ref={bentoRef}
-        className={`bento${isMobile ? " mobile" : bentoReady ? " canvas" : ""}${!isMobile && bentoEdit ? " editing" : ""}${meetOpen ? " offscreen" : ""}`}
+        className={`bento${isMobile ? " mobile" : bentoReady ? " canvas" : ""}${!isMobile && bentoEdit ? " editing" : ""}`}
       >
 
         {/* ════ Avatar & Session — cols 1-6, rows 1-3 ════ */}
