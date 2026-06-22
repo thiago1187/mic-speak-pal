@@ -121,19 +121,19 @@ const DEFAULT_SETTINGS: Settings = {
       greeting: "Olá! Eu sou o Renante, da Gravidade Zero. Podem falar comigo à vontade.",
       reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "always",
-      bargeIn: false,
+      bargeIn: true,
     },
     reuniao: {
       greeting: "Olá pessoal! Eu sou o Renante, da Gravidade Zero. É só me chamar pelo nome quando precisarem.",
       reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "wake",
-      bargeIn: false,
+      bargeIn: true,
     },
     entrevistador: {
-      greeting: "Oi! Eu sou o Renante e vou conduzir essa conversa. Podem responder quando quiserem.",
+      greeting: "Oi, tudo bem? Eu sou o Renante, uma mistura do conciente do Renan e Dante e vou conduzir essa conversa. Pra gente começar, qual é o seu nome?",
       reconnectGreeting: "Eita, caiu a conexão — pode continuar de onde estava.",
       behavior: "always",
-      bargeIn: false,
+      bargeIn: true,
     },
   },
   meetDebug: false,
@@ -540,6 +540,14 @@ function Index() {
     );
     setTimeout(() => setSettingsSaved(false), 1800);
   }, [settingsDraft]);
+
+  // Auto-save do modal "Config": enquanto aberto, persiste o rascunho 600ms
+  // após a última alteração — mesmo comportamento de auto-save dos painéis.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const id = window.setTimeout(() => saveSettings(), 600);
+    return () => window.clearTimeout(id);
+  }, [settingsDraft, settingsOpen, saveSettings]);
 
   // Puxa avatares (da conta + públicos) e vozes da API HeyGen pra preencher os selects.
   const loadAvatarVoiceLists = useCallback(async () => {
@@ -2668,6 +2676,20 @@ function Index() {
   }, [diagReport]);
 
   // ── helper: update a setting inline (saves immediately) ──
+  // Flash "salvo automaticamente" — reaproveita settingsSaved/lastSavedAt.
+  const savedTimerRef = useRef<number | null>(null);
+  const markSaved = useCallback(() => {
+    setSettingsSaved(true);
+    setLastSavedAt(
+      new Date().toLocaleString("pt-BR", {
+        day: "2-digit", month: "2-digit", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+      }),
+    );
+    if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = window.setTimeout(() => setSettingsSaved(false), 1800);
+  }, []);
+
   function updateSetting<K extends keyof Settings>(key: K, val: Settings[K]) {
     setSettings((s) => {
       const next = { ...s, [key]: val };
@@ -2676,7 +2698,42 @@ function Index() {
       return next;
     });
     setSettingsDraft((d) => ({ ...d, [key]: val }));
+    markSaved();
   }
+
+  // Atualiza um campo de um modo (meetConfigs) com auto-save no localStorage —
+  // mesmo comportamento dos demais campos de painel (corrige a perda no reload).
+  function updateMeetConfig(modeId: Mode, patch: Partial<MeetModeConfig>) {
+    setSettings((s) => {
+      const next = {
+        ...s,
+        meetConfigs: { ...s.meetConfigs, [modeId]: { ...s.meetConfigs[modeId], ...patch } },
+      };
+      settingsRef.current = next;
+      try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setSettingsDraft((d) => ({
+      ...d,
+      meetConfigs: { ...d.meetConfigs, [modeId]: { ...d.meetConfigs[modeId], ...patch } },
+    }));
+    markSaved();
+  }
+
+  // Restaura TODAS as configurações para o padrão do código (DEFAULT_SETTINGS).
+  const resetToDefaults = useCallback(() => {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Restaurar todas as configurações para o padrão? As alterações locais deste navegador serão perdidas.")
+    ) {
+      return;
+    }
+    setSettings(DEFAULT_SETTINGS);
+    setSettingsDraft(DEFAULT_SETTINGS);
+    settingsRef.current = DEFAULT_SETTINGS;
+    try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS)); } catch {}
+    markSaved();
+  }, [markSaved]);
 
   // ── bento: seed positions from grid on first mount ──
   useEffect(() => {
@@ -2913,14 +2970,6 @@ function Index() {
           WebRTC: {webrtcState}
         </span>
 
-        <div className="seg-ctl">
-          {MODES.map((m) => (
-            <button key={m.id} className={mode === m.id ? "on" : ""} onClick={() => setMode(m.id)}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-
         <div className="right">
           <div className="setwrap" onClick={(e) => e.stopPropagation()}>
             <button
@@ -2971,6 +3020,21 @@ function Index() {
               </div>
             </div>
           </div>
+          {settingsSaved && (
+            <span
+              title={lastSavedAt ? `Último salvamento: ${lastSavedAt}` : undefined}
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontFamily: "var(--mono)", color: "var(--green)", whiteSpace: "nowrap" }}
+            >
+              ✓ salvo automaticamente
+            </span>
+          )}
+          <button
+            className="btn sm"
+            onClick={resetToDefaults}
+            title="Restaurar todas as configurações para o padrão"
+          >
+            ↺ Restaurar padrões
+          </button>
           <button
             className="btn sm"
             onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}
@@ -3575,7 +3639,7 @@ function Index() {
                       <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala ao entrar <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink-3)", marginLeft: 4 }}>1ª conexão</span></label>
                       <textarea className="inp" rows={2} spellCheck={false}
                         value={cfg.greeting}
-                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], greeting: e.target.value } } }))}
+                        onChange={(e) => updateMeetConfig(m.id, { greeting: e.target.value })}
                         placeholder="Fala ao conectar pela 1ª vez…"
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -3584,7 +3648,7 @@ function Index() {
                       <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Fala ao reconectar <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--ink-3)", marginLeft: 4 }}>hot-swap</span></label>
                       <textarea className="inp" rows={2} spellCheck={false}
                         value={cfg.reconnectGreeting}
-                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], reconnectGreeting: e.target.value } } }))}
+                        onChange={(e) => updateMeetConfig(m.id, { reconnectGreeting: e.target.value })}
                         placeholder="Fala ao reconectar (hot-swap)…"
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -3592,7 +3656,7 @@ function Index() {
                     <div>
                       <label style={{ fontSize: "10.5px", fontWeight: 500, color: "var(--ink-2)", display: "block", marginBottom: 3 }}>Comportamento</label>
                       <select className="inp" value={cfg.behavior}
-                        onChange={(e) => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], behavior: e.target.value as "always" | "wake" } } }))}
+                        onChange={(e) => updateMeetConfig(m.id, { behavior: e.target.value as "always" | "wake" })}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <option value="always">Sempre ativo (responde tudo)</option>
@@ -3602,7 +3666,7 @@ function Index() {
                     <div className="switch" onClick={(e) => e.stopPropagation()}>
                       <div className="lab">Barge-in<small>interromper falando por cima</small></div>
                       <div className={`sw${cfg.bargeIn ? " on" : ""}`}
-                        onClick={() => setSettings((s) => ({ ...s, meetConfigs: { ...s.meetConfigs, [m.id]: { ...s.meetConfigs[m.id], bargeIn: !cfg.bargeIn } } }))}
+                        onClick={() => updateMeetConfig(m.id, { bargeIn: !cfg.bargeIn })}
                         role="switch" aria-checked={cfg.bargeIn}
                       />
                     </div>
@@ -4675,14 +4739,11 @@ function Index() {
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+              <span className="text-xs text-muted-foreground">
+                As alterações são salvas automaticamente.
+              </span>
               <button
-                onClick={saveSettings}
-                className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
-              >
-                Salvar
-              </button>
-              <button
-                onClick={() => setSettingsDraft(DEFAULT_SETTINGS)}
+                onClick={resetToDefaults}
                 className="rounded-md border border-border px-4 py-2 text-sm"
               >
                 Restaurar padrões
