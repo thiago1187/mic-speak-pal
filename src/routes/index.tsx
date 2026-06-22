@@ -36,12 +36,14 @@ export const Route = createFileRoute("/")({
 const SPEAK_TIMEOUT_MS = 60_000;
 const SETTINGS_KEY = "liveavatar.settings.v1";
 const MODE_KEY = "liveavatar.mode.v1";
-// Entrevistador: pausa de silêncio (s) antes de considerar que a pessoa terminou.
-// Fallback caso a config não esteja salva. Ajustável na UI (entrevistadorSilenceSec).
+// Entrevistador: usado no DEFAULT_SETTINGS (campo entrevistadorSilenceSec).
 const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 1;
-// Conversa/Reunião: tempo de silêncio (s) antes de fechar a fala e enviar — evita
-// cortar a frase no meio quando o STT finaliza cedo numa pausa curta.
-const SPEECH_FLUSH_SEC_DEFAULT = 1;
+// Envio GUIADO PELO MUTE: o operador muta o microfone pra sinalizar "terminei de
+// falar". O mute dispara o envio após uma graça curta (MUTE_FLUSH_MS), só o tempo do
+// último trecho do STT chegar. Se ele NÃO mutar, um fallback de silêncio longo
+// (SPEECH_FLUSH_SEC_DEFAULT) evita cortar quando a pessoa dá pausas pra pensar.
+const SPEECH_FLUSH_SEC_DEFAULT = 5; // fallback: só envia após 5s de silêncio sem mutar
+const MUTE_FLUSH_MS = 200; // ao mutar, espera só isso pro último trecho chegar e envia
 // Hot-swap: tempo após (re)conectar para pré-aquecer uma NOVA sessão e trocar,
 // driblando o limite de duração por sessão do plano (Starter = 5 min, até 5 sessões
 // simultâneas). O "cérebro" (n8n) é independente da sessão HeyGen, então o contexto
@@ -1021,11 +1023,10 @@ function Index() {
     if (interviewerSilenceTimerRef.current !== null) {
       window.clearTimeout(interviewerSilenceTimerRef.current);
     }
-    const sec =
-      modeRef.current === "entrevistador"
-        ? settingsRef.current.entrevistadorSilenceSec || ENTREVISTADOR_SILENCE_SEC_DEFAULT
-        : SPEECH_FLUSH_SEC_DEFAULT;
-    interviewerSilenceTimerRef.current = window.setTimeout(flushSpeech, Math.max(0.4, sec) * 1000);
+    // Mutado = o operador sinalizou que a pessoa terminou → envia logo (graça curta
+    // pro último trecho do STT chegar). Sem mutar = espera o fallback de silêncio longo.
+    const ms = isMutedRef.current ? MUTE_FLUSH_MS : SPEECH_FLUSH_SEC_DEFAULT * 1000;
+    interviewerSilenceTimerRef.current = window.setTimeout(flushSpeech, ms);
   }, [flushSpeech]);
 
   // Trecho parcial (interim): atualiza a transcrição ao vivo e ADIA o envio (usuário
@@ -1446,10 +1447,13 @@ function Index() {
     }
     // Fecha o Deepgram com elegância: recebe a transcrição final antes de encerrar.
     stopDeepgram({ graceful: true });
+    // Mute = "terminei de falar" → agenda o envio com a graça curta (MUTE_FLUSH_MS).
+    // Se o último trecho do STT chegar nesse meio-tempo, ele entra no buffer antes.
+    scheduleSpeechFlush();
     setMicState("desligado");
     setStatus("microphone", "waiting", "Escuta desativada");
     log("escuta desativada");
-  }, [log, logError, setStatus, stopDeepgram]);
+  }, [log, logError, setStatus, stopDeepgram, scheduleSpeechFlush]);
 
   const toggleMute = useCallback(() => {
     if (botIdRef.current) {
