@@ -868,8 +868,14 @@ function Index() {
   }, [log, logError]);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ block: "end" });
-    meetLogEndRef.current?.scrollIntoView({ block: "end" });
+    // Rola APENAS o container interno do log (não a página). scrollIntoView
+    // arrastava a página inteira pra baixo no mobile (painéis em fluxo normal).
+    const toBottom = (marker: HTMLElement | null) => {
+      const c = marker?.parentElement;
+      if (c) c.scrollTop = c.scrollHeight;
+    };
+    toBottom(logEndRef.current);
+    toBottom(meetLogEndRef.current);
   }, [logs]);
 
   // Relógio real da chamada: marca o início na 1ª conexão; zera ao encerrar.
