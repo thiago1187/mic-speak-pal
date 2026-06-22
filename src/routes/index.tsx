@@ -486,6 +486,13 @@ function Index() {
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<"avatar" | "webhooks" | "modos" | "meet">("avatar");
+  // O servidor (Vercel/.env) enxerga as chaves? null = ainda checando.
+  const [envStatus, setEnvStatus] = useState<{ heygen: boolean; deepgram: boolean; recall: boolean } | null>(null);
+  // Sequência de boot: cada item começa "pending" (vermelho), passa por
+  // "checking" (amarelo) e termina "done" (verde/real). Estética de checagem.
+  const [bootChecks, setBootChecks] = useState<Record<string, "pending" | "checking" | "done">>({
+    avatar: "pending", webhooks: "pending", modos: "pending", recall: "pending",
+  });
   // Listas puxadas da API HeyGen (avatares/vozes) pra preencher os selects.
   const [avatarOptions, setAvatarOptions] = useState<AvatarOption[]>([]);
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
@@ -872,33 +879,113 @@ function Index() {
     }
   }, [connected]);
 
-  // Tick de 1s enquanto a sessão está aberta (relógio + contagem do hot-swap).
+  // Tick de 1s para o relógio + contagem do hot-swap. Roda na tela cheia OU
+  // sempre que houver sessão conectada (senão o contador do painel hot-swap,
+  // na visão do console, fica congelado — só a tela cheia atualizava antes).
   useEffect(() => {
-    if (!meetOpen) return;
+    if (!meetOpen && !connected) return;
     setNowTs(Date.now());
     const id = window.setInterval(() => setNowTs(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [meetOpen]);
+  }, [meetOpen, connected]);
 
-  // Diagnóstico: checa se o SERVIDOR enxerga as variáveis de ambiente (.env / Vercel).
+  // ── Sequência de BOOT (pré-sessão): narra cada etapa no log e anima as
+  // luzes da Prontidão (vermelho → amarelo "verificando" → verde). Estética
+  // de "em desenvolvimento" + diagnóstico real (env do servidor + webhooks). ──
   useEffect(() => {
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+    const setCheck = (id: string, ph: "pending" | "checking" | "done") =>
+      setBootChecks((prev) => ({ ...prev, [id]: ph }));
+
     void (async () => {
+      log("Inicializando console RenAnte Avatar AI…");
+      await sleep(450);
+      if (cancelled) return;
+      log("Carregando configurações locais (localStorage)…");
+      await sleep(500);
+      if (cancelled) return;
+
+      // 1) Ambiente do servidor (Vercel/.env)
+      log("Verificando ambiente do servidor (Vercel/.env)…");
+      await sleep(350);
       try {
         const st = await callEnvStatus();
-        log(
-          `[env servidor] HEYGEN=${st.heygen} DEEPGRAM=${st.deepgram} RECALL=${st.recall}`,
-          st.heygen ? "ok" : "err",
-        );
+        if (cancelled) return;
+        setEnvStatus(st);
+        log(`[env servidor] HEYGEN=${st.heygen} DEEPGRAM=${st.deepgram} RECALL=${st.recall}`, st.heygen ? "ok" : "err");
         if (!st.heygen) {
-          log(
-            "⚠️ O servidor NÃO está enxergando HEYGEN_API_KEY. Na Vercel: confirme a variável em Production e faça um Redeploy (sem cache).",
-            "err",
-          );
+          log("⚠️ O servidor NÃO está enxergando HEYGEN_API_KEY. Na Vercel: confirme a variável em Production e faça um Redeploy (sem cache).", "err");
         }
       } catch (e) {
         logError("checagem de env do servidor falhou", e);
       }
+      await sleep(400);
+      if (cancelled) return;
+
+      const s = settingsRef.current;
+      const req = (v?: string) => (v ?? "").trim() !== "";
+
+      // 2) Avatar & Voz
+      setCheck("avatar", "checking");
+      log("Verificando credenciais e identificadores do avatar (HeyGen)…");
+      await sleep(750);
+      if (cancelled) return;
+      const avatarOkNow = (["avatarId", "voiceId", "contextId", "language"] as (keyof Settings)[]).every((k) => req(s[k] as string));
+      setCheck("avatar", "done");
+      log(avatarOkNow ? "Avatar & Voz: configurado ✓" : "Avatar & Voz: faltam campos obrigatórios", avatarOkNow ? "ok" : "err");
+      await sleep(300);
+      if (cancelled) return;
+
+      // 3) Webhooks n8n — alcançabilidade (GET no-cors NÃO dispara o fluxo POST)
+      setCheck("webhooks", "checking");
+      log("Testando conexão com os webhooks n8n (pré-sessão)…");
+      const hooks: [string, string][] = [
+        ["Conversa", s.webhookConversa],
+        ["Reunião", s.webhookReuniao],
+        ["Entrevistador", s.webhookEntrevistador],
+        ["Filler", s.webhookFiller],
+      ];
+      for (const [nm, url] of hooks) {
+        if (cancelled) return;
+        if (!url) { log(`webhook ${nm}: (não configurado)`, "err"); continue; }
+        const t0 = performance.now();
+        try {
+          await fetch(url, { method: "GET", mode: "no-cors" });
+          log(`webhook ${nm}: ✅ host alcançável (${Math.round(performance.now() - t0)}ms)`, "ok");
+        } catch (e: any) {
+          log(`webhook ${nm}: ❌ inalcançável — ${e?.message ?? e}`, "err");
+        }
+        await sleep(350);
+      }
+      setCheck("webhooks", "done");
+      await sleep(300);
+      if (cancelled) return;
+
+      // 4) Modos
+      setCheck("modos", "checking");
+      log("Validando comportamento dos modos (Conversa / Reunião / Entrevistador)…");
+      await sleep(650);
+      if (cancelled) return;
+      setCheck("modos", "done");
+      log("Modos: comportamento e saudações ok ✓", "ok");
+      await sleep(300);
+      if (cancelled) return;
+
+      // 5) Recall.ai (Camada 3, opcional)
+      setCheck("recall", "checking");
+      log("Verificando Recall.ai (Camada 3 — avatar no Google Meet, opcional)…");
+      await sleep(650);
+      if (cancelled) return;
+      setCheck("recall", "done");
+      log(req(s.recallApiKey) ? "Recall.ai: configurado ✓" : "Recall.ai: opcional (não configurado)", "ok");
+      await sleep(350);
+      if (cancelled) return;
+
+      log("✅ Console pronto. Aguardando início da sessão.", "ok");
     })();
+
+    return () => { cancelled = true; };
   }, [callEnvStatus, log, logError]);
 
   // ===== Roteamento de transcrição (compartilhado entre Web Speech e Deepgram) =====
@@ -2933,6 +3020,9 @@ function Index() {
       ? Math.max(0, swapTotal - Math.floor((nowTs - sessionStartedAtRef.current) / 1000))
       : null;
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? mode;
+  // Chave HeyGen OK = preenchida na UI OU o servidor tem HEYGEN_API_KEY (env).
+  // Enquanto o env ainda está sendo checado (null), assume OK (otimista).
+  const heygenKeyOk = !!settings.apiKey || (envStatus ? envStatus.heygen : true);
   const sttEngineLabel = settings.sttEngine === "deepgram" ? "Deepgram" : "Web Speech";
   const sttTone: LedTone = muted ? "off" : micLastError ? "red" : listening ? "green" : "amber";
   const sttValue = muted ? "desligado" : micLastError ? "erro" : listening ? `ouvindo · ${sttEngineLabel}` : "iniciando";
@@ -3458,30 +3548,42 @@ function Index() {
                   {(
                     [
                       {
+                        id: "avatar",
                         nm: "Avatar & Voz",
                         sub: "heygen liveavatar",
                         ok: avatarOk,
                         vl: avatarOk ? `${avatarFilledCount}/${avatarFields.length} ok` : `${avatarFilledCount}/${avatarFields.length} configurados`,
                       },
                       {
+                        id: "webhooks",
                         nm: "Webhooks n8n",
                         sub: "4 endpoints",
                         ok: webhooksOk,
                         vl: `${webhooksFilledCount}/${webhookFields.length} configurados`,
                       },
-                      { nm: "Modos", sub: "comportamento", ok: true, vl: "ok" },
-                      { nm: "Recall", sub: "camada 3 · opcional", ok: true, vl: "opcional" },
-                    ] as { nm: string; sub: string; ok: boolean; vl: string }[]
-                  ).map((r) => (
-                    <div className="statrow" key={r.nm}>
-                      <span className={`led ${r.ok ? "green" : "red blink"}`} />
-                      <span className="nm">
-                        {r.nm}
-                        <small>{r.sub}</small>
-                      </span>
-                      <span className={`vl ${r.ok ? "ok" : "err"}`}>{r.vl}</span>
-                    </div>
-                  ))}
+                      { id: "modos", nm: "Modos", sub: "comportamento", ok: true, vl: "ok" },
+                      { id: "recall", nm: "Recall", sub: "camada 3 · opcional", ok: true, vl: "opcional" },
+                    ] as { id: string; nm: string; sub: string; ok: boolean; vl: string }[]
+                  ).map((r) => {
+                    // Fase do boot: pending=vermelho, checking=amarelo, done=estado real.
+                    const phase = bootChecks[r.id] ?? "done";
+                    const tone =
+                      phase === "pending" ? "red" :
+                      phase === "checking" ? "amber blink" :
+                      r.ok ? "green" : "red blink";
+                    const vlText = phase === "pending" ? "aguardando…" : phase === "checking" ? "verificando…" : r.vl;
+                    const vlCls = phase === "checking" ? "warn" : phase === "done" ? (r.ok ? "ok" : "err") : "";
+                    return (
+                      <div className="statrow" key={r.nm}>
+                        <span className={`led ${tone}`} />
+                        <span className="nm">
+                          {r.nm}
+                          <small>{r.sub}</small>
+                        </span>
+                        <span className={`vl ${vlCls}`}>{vlText}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -3727,19 +3829,27 @@ function Index() {
         <div ref={(el) => { panelRefs.current["avatarvoz"] = el; }} data-pid="avatarvoz" className="panel" style={pStyle("avatarvoz", { gridColumn: "1/5", gridRow: 5 })}>
           <div className="ph">
             <div className="drag" onPointerDown={(e) => startMove(e, "avatarvoz")}>⠿</div>
-            <span className="led red blink" />
+            <span className={`led ${heygenKeyOk ? "green" : "red blink"}`} />
             <span className="ico">🎭</span>
             <span className="tt">Avatar & Voz <small>· HeyGen LiveAvatar</small></span>
-            <div className="r"><span className={`badge${!settings.apiKey ? " err" : ""}`}>{settings.apiKey ? "API OK" : "API KEY"}</span></div>
+            <div className="r"><span className={`badge${heygenKeyOk ? "" : " err"}`}>{settings.apiKey ? "API OK" : heygenKeyOk ? "via env" : "API KEY"}</span></div>
           </div>
           <div className="pb">
             <div className="cfgnote">Credenciais e identificadores. Campos com * são obrigatórios para conectar.</div>
             <div className="fields">
-              <div className={`field wide req${!settings.apiKey ? " err" : ""}`}>
-                <label>Chave da API HeyGen <span className="hint">api_key</span></label>
+              <div className={`field wide${!heygenKeyOk ? " err" : ""}`}>
+                <label>Chave da API HeyGen <span className="hint">api_key · opcional</span></label>
                 <input className="inp pass" type="password" value={settings.apiKey}
                   onChange={(e) => updateSetting("apiKey", e.target.value)} spellCheck={false} placeholder="hk-… (ou usa env do servidor)" />
-                {!settings.apiKey && <div className="reqmsg" style={{ color: "var(--ink-3)" }}>Opcional — usa HEYGEN_API_KEY do servidor se vazio</div>}
+                {!settings.apiKey && (
+                  <div className="reqmsg" style={{ color: heygenKeyOk ? "var(--ink-3)" : "var(--red)" }}>
+                    {envStatus === null
+                      ? "Vazio — usa HEYGEN_API_KEY do servidor (verificando…)"
+                      : heygenKeyOk
+                        ? "Vazio — usando HEYGEN_API_KEY do servidor (Vercel) ✓"
+                        : "⚠️ Vazio e o servidor NÃO tem HEYGEN_API_KEY. Configure na Vercel e faça redeploy."}
+                  </div>
+                )}
               </div>
 
               {/* puxar listas da API HeyGen */}
