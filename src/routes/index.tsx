@@ -3169,9 +3169,12 @@ function Index() {
       )}
 
       {/* ── bento grid ── */}
+      {/* Em tela cheia, o console fica oculto (display:none): para de pintar os
+          10 painéis/LEDs/log atrás do overlay, economizando GPU/CPU. Os refs e
+          o stream do avatar continuam vivos (videoRef segue montado p/ hot-swap). */}
       <div
         ref={bentoRef}
-        className={`bento${isMobile ? " mobile" : bentoReady ? " canvas" : ""}${!isMobile && bentoEdit ? " editing" : ""}`}
+        className={`bento${isMobile ? " mobile" : bentoReady ? " canvas" : ""}${!isMobile && bentoEdit ? " editing" : ""}${meetOpen ? " offscreen" : ""}`}
       >
 
         {/* ════ Avatar & Session — cols 1-6, rows 1-3 ════ */}
@@ -4052,11 +4055,11 @@ function Index() {
                 <span className="text-white/40">·</span>
                 <span className="text-white/80">{modeLabel}</span>
               </span>
-              <span className="flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75 backdrop-blur">
+              <span className="flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75">
                 <SessionLed tone={rtcToTone(webrtcState)} blink={rtcToTone(webrtcState) === "amber"} />
                 WebRTC: {webrtcState}
               </span>
-              <span className="rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75 backdrop-blur">
+              <span className="rounded-full border border-white/12 bg-white/5 px-2.5 py-1 font-mono text-[10px] text-white/75">
                 ⏱ {elapsed}
               </span>
             </div>
@@ -4081,7 +4084,7 @@ function Index() {
               logCollapsed ? "" : "bottom-[150px]"
             }`}
           >
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-[rgba(8,10,14,.82)] shadow-[0_8px_30px_rgba(0,0,0,.5)] backdrop-blur-md">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-[rgba(8,10,14,.82)] shadow-[0_8px_30px_rgba(0,0,0,.5)]">
               <button
                 onClick={() => setLogCollapsed((v) => !v)}
                 className="flex w-full shrink-0 items-center justify-between px-3 py-2 text-left hover:bg-white/5"
@@ -4128,7 +4131,7 @@ function Index() {
 
           {/* ===== Right: sidebar técnica (glass) com logo, selo e LEDs reais ===== */}
           <aside className="absolute right-3 top-16 z-20 flex w-64 flex-col gap-3">
-            <div className="rounded-xl border border-white/12 bg-[rgba(10,12,16,.9)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.5)] backdrop-blur-md">
+            <div className="rounded-xl border border-white/12 bg-[rgba(10,12,16,.9)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.5)]">
               {/* Header: logo GZero real preenchendo a largura (tamanho = proporção do PNG) + ALPHA */}
               <div className="relative mb-3 rounded-lg bg-black/50 p-2">
                 <SidebarLogo className="h-auto w-full object-contain" />
@@ -4170,7 +4173,7 @@ function Index() {
 
             {/* Estado de voz (Reunião) — real (wake/dormindo) */}
             {mode === "reuniao" && (
-              <div className="rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
+              <div className="rounded-xl border border-white/12 bg-[rgba(17,20,25,.92)] p-3 shadow-[0_8px_30px_rgba(0,0,0,.4)]">
                 <div className="mb-1.5 flex items-center justify-between">
                   <span className="font-mono text-[10px] uppercase tracking-wider text-white/55">comandos de voz</span>
                   <span className={`flex items-center gap-1.5 font-mono text-[9px] ${meetingActive ? "text-emerald-300" : "text-white/50"}`}>
@@ -4200,21 +4203,21 @@ function Index() {
           )}
 
           {camError && (
-            <div className="absolute left-3 bottom-[150px] z-20 max-w-xs rounded-md border border-red-400/40 bg-red-500/15 px-3 py-2 text-xs text-red-200 backdrop-blur">
+            <div className="absolute left-3 bottom-[150px] z-20 max-w-xs rounded-md border border-red-400/40 bg-red-500/15 px-3 py-2 text-xs text-red-200">
               Câmera indisponível: {camError}
             </div>
           )}
 
           {/* Legenda ao vivo */}
           {settings.captionsEnabled && (liveTranscript || micLastInterim) && (
-            <div className="pointer-events-none absolute bottom-[150px] left-1/2 z-10 max-w-2xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white backdrop-blur">
+            <div className="pointer-events-none absolute bottom-[150px] left-1/2 z-10 max-w-2xl -translate-x-1/2 rounded-md bg-black/60 px-4 py-2 text-center text-base text-white">
               {liveTranscript || micLastInterim}
             </div>
           )}
 
           {/* ===== Barra de fallback por texto ===== */}
           <div className="absolute inset-x-0 bottom-[84px] z-20 px-4">
-            <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-xl border border-white/12 bg-[rgba(17,20,25,.64)] px-3 py-2 shadow-[0_8px_30px_rgba(0,0,0,.4)] backdrop-blur-md">
+            <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-xl border border-white/12 bg-[rgba(17,20,25,.92)] px-3 py-2 shadow-[0_8px_30px_rgba(0,0,0,.4)]">
               <input
                 value={text}
                 onChange={(e) => {
@@ -4241,7 +4244,7 @@ function Index() {
               onClick={toggleMute}
               disabled={!speechSupported && settings.sttEngine !== "deepgram"}
               title={muted ? "Ativar microfone" : "Mutar microfone"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl transition-colors ${
                 muted ? "bg-destructive text-destructive-foreground" : "bg-white/12 text-white hover:bg-white/25"
               } disabled:opacity-40`}
             >
@@ -4250,7 +4253,7 @@ function Index() {
             <button
               onClick={toggleCamera}
               title={camOn ? "Desligar câmera" : "Ligar câmera"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl transition-colors ${
                 camOn ? "bg-white/12 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
               }`}
             >
@@ -4260,14 +4263,14 @@ function Index() {
               onClick={interruptAvatar}
               disabled={!connected}
               title="Interromper fala (espaço)"
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25 disabled:opacity-40"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white hover:bg-white/25 disabled:opacity-40"
             >
               ⏹
             </button>
             <button
               onClick={toggleCaptions}
               title={settings.captionsEnabled ? "Desativar legendas" : "Ativar legendas"}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl backdrop-blur transition-colors ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full border border-white/12 text-xl transition-colors ${
                 settings.captionsEnabled ? "bg-white/12 text-white hover:bg-white/25" : "bg-destructive text-destructive-foreground"
               }`}
             >
@@ -4276,14 +4279,14 @@ function Index() {
             <button
               onClick={toggleFullscreen}
               title={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white backdrop-blur hover:bg-white/25"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white hover:bg-white/25"
             >
               {isFullscreen ? "🗗" : "⛶"}
             </button>
             <button
               onClick={() => setMeetOpen(false)}
               title="Voltar ao painel"
-              className="flex h-12 items-center justify-center gap-1.5 rounded-full border border-white/12 bg-white/12 px-4 text-sm font-medium text-white backdrop-blur hover:bg-white/25"
+              className="flex h-12 items-center justify-center gap-1.5 rounded-full border border-white/12 bg-white/12 px-4 text-sm font-medium text-white hover:bg-white/25"
             >
               ⊟ Painel
             </button>

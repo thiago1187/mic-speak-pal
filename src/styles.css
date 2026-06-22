@@ -501,6 +501,8 @@
 }
 
 /* ── free-form bento canvas ── */
+/* Oculto enquanto a tela cheia do avatar está aberta (economiza GPU/CPU). */
+.cr .bento.offscreen { display: none !important; }
 .cr .bento.canvas { position: relative; overflow: visible; min-height: 600px; }
 .cr .bento.canvas .panel { position: absolute; box-sizing: border-box; overflow: hidden; }
 .cr .bento.canvas.editing {
