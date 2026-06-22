@@ -625,4 +625,17 @@
 @media (max-width: 720px) {
   .cr .bento { grid-template-columns: 1fr; }
   .cr .modegrid { grid-template-columns: 1fr; }
+  .cr .fields { grid-template-columns: 1fr; }
+  .cr .topbar .setwrap { display: none; } /* edição de layout não faz sentido no mobile */
 }
+
+/* ── layout móvel: empilha os painéis (substitui o canvas absoluto) ── */
+.cr .bento.mobile {
+  display: flex; flex-direction: column; gap: 13px;
+  height: auto !important; min-height: 0; overflow: visible;
+}
+.cr .bento.mobile .panel {
+  position: static !important; left: auto !important; top: auto !important;
+  width: 100% !important; height: auto !important;
+}
+.cr .bento.mobile .panel[data-pid="log"] { max-height: 60vh; }

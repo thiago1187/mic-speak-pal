@@ -670,6 +670,8 @@ function Index() {
   const [bentoCell, setBentoCell] = useState(20);
   const [bentoSnap, setBentoSnap] = useState(true);
   const [bentoEdit, setBentoEdit] = useState(false);
+  // Mobile: abandona o canvas absoluto e empilha os painéis (1 coluna).
+  const [isMobile, setIsMobile] = useState(false);
   const [bentoPopOpen, setBentoPopOpen] = useState(false);
   const [bentoDestMeet, setBentoDestMeet] = useState(false);
   const bentoRef = useRef<HTMLDivElement>(null);
@@ -2844,17 +2846,29 @@ function Index() {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── detecta viewport móvel (≤720px) p/ empilhar os painéis ──
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 720);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
   // ── bento: save to localStorage on change ──
   useEffect(() => {
     if (!bentoReady) return;
     try { window.localStorage.setItem(BENTO_KEY, JSON.stringify({ rects: bentoRects, cell: bentoCell, snap: bentoSnap })); } catch {}
     const be = bentoRef.current;
     if (!be) return;
-    let max = 0;
-    for (const r of Object.values(bentoRects)) max = Math.max(max, r.y + r.h);
-    be.style.height = (max + bentoCell * 2) + "px";
+    if (isMobile) {
+      be.style.height = "auto"; // empilhado: deixa o conteúdo definir a altura
+    } else {
+      let max = 0;
+      for (const r of Object.values(bentoRects)) max = Math.max(max, r.y + r.h);
+      be.style.height = (max + bentoCell * 2) + "px";
+    }
     document.documentElement.style.setProperty("--cell", bentoCell + "px");
-  }, [bentoReady, bentoRects, bentoCell, bentoSnap]);
+  }, [bentoReady, bentoRects, bentoCell, bentoSnap, isMobile]);
 
   // ── bento: close layout popover on outside click ──
   useEffect(() => {
@@ -2996,6 +3010,8 @@ function Index() {
 
   // ── bento: panel style helper ──
   function pStyle(id: string, fallback: React.CSSProperties): React.CSSProperties {
+    // Mobile: sem posicionamento absoluto — os painéis fluem empilhados (CSS .mobile).
+    if (isMobile) return {};
     if (bentoReady && bentoRects[id]) {
       const r = bentoRects[id];
       return { position: "absolute" as const, left: r.x, top: r.y, width: r.w, height: r.h };
@@ -3149,7 +3165,7 @@ function Index() {
       {/* ── bento grid ── */}
       <div
         ref={bentoRef}
-        className={`bento${bentoReady ? " canvas" : ""}${bentoEdit ? " editing" : ""}`}
+        className={`bento${isMobile ? " mobile" : bentoReady ? " canvas" : ""}${!isMobile && bentoEdit ? " editing" : ""}`}
       >
 
         {/* ════ Avatar & Session — cols 1-6, rows 1-3 ════ */}
