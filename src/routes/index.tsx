@@ -142,7 +142,7 @@ const DEFAULT_SETTINGS: Settings = {
   meetSilenceSec: 0.5,
   entrevistadorSilenceSec: ENTREVISTADOR_SILENCE_SEC_DEFAULT,
   hotSwapAfterSec: HOT_SWAP_AFTER_SEC_DEFAULT,
-  sttEngine: "webspeech",
+  sttEngine: "deepgram",
   deepgramApiKey: "",
 };
 
@@ -462,6 +462,10 @@ function Index() {
   const fillerHistoryRef = useRef<string[]>([]);
   // Rate limit: hora do último handleSend, pra limitar envios ao n8n (≤ ~2 chamadas/seg).
   const lastSendRef = useRef<{ text: string; timestamp: number }>({ text: "", timestamp: 0 });
+  // "Nova conversa": sufixo opcional do sessionId. Vazio = padrão (só o nome do modo).
+  // Ao gerar um sufixo novo, o n8n vê um sessionId novo → começa do zero (contexto limpo).
+  const conversationTagRef = useRef("");
+  const [conversationTag, setConversationTag] = useState("");
   // Hot-swap: reinício automático da sessão HeyGen preservando contexto (que vive no n8n).
   const sessionStartedAtRef = useRef(0);
   const swapInProgressRef = useRef(false);
@@ -1029,6 +1033,25 @@ function Index() {
     interviewerSilenceTimerRef.current = window.setTimeout(flushSpeech, ms);
   }, [flushSpeech]);
 
+  // "Nova conversa": gera um novo sufixo de sessionId (→ n8n começa do zero) e limpa
+  // qualquer estado pendente de turno (buffer, filler, dedup).
+  const newConversation = useCallback(() => {
+    const tag = `c${Date.now().toString(36).slice(-5)}`;
+    conversationTagRef.current = tag;
+    setConversationTag(tag);
+    fillerHistoryRef.current = [];
+    interviewerBufferRef.current = "";
+    if (interviewerSilenceTimerRef.current !== null) {
+      window.clearTimeout(interviewerSilenceTimerRef.current);
+      interviewerSilenceTimerRef.current = null;
+    }
+    lastSendRef.current = { text: "", timestamp: 0 };
+    setInterviewerWaiting(false);
+    setLiveTranscript("");
+    setText("");
+    log(`🔄 Nova conversa — contexto reiniciado (sessionId tag=${tag})`, "ok");
+  }, [log]);
+
   // Trecho parcial (interim): atualiza a transcrição ao vivo e ADIA o envio (usuário
   // ainda está falando).
   const routeInterim = useCallback(
@@ -1084,13 +1107,10 @@ function Index() {
     );
     if (!SR) {
       setSpeechSupported(false);
-      // Padrão inteligente: navegador sem Web Speech → usa Deepgram (universal).
-      if (settingsRef.current.sttEngine !== "deepgram") {
-        log("Navegador sem Web Speech → transcrição trocada para Deepgram", "ok");
-        setSttEngine("deepgram");
-      }
+      // NÃO troca o motor automaticamente — respeita a escolha do usuário. O padrão
+      // já é Deepgram; quem quiser Web Speech num navegador sem suporte verá o aviso.
       const message =
-        "Web Speech indisponível neste navegador — usando Deepgram (configure a API key).";
+        "Web Speech indisponível neste navegador — selecione Deepgram na transcrição.";
       setStatus("microphone", "waiting", message);
       log(message);
       return;
@@ -1202,7 +1222,7 @@ function Index() {
       } catch {}
       recognitionRef.current = null;
     };
-  }, [log, logError, maybeStartListening, routeFinal, routeInterim, setSttEngine, setStatus]);
+  }, [log, logError, maybeStartListening, routeFinal, routeInterim, setStatus]);
 
   // ===== Motor Deepgram (alternativa universal ao Web Speech) =====
   // Captura o microfone, converte para PCM16 e envia por WebSocket ao Deepgram,
@@ -1969,10 +1989,14 @@ function Index() {
         (currentMode === "reuniao" && responder === true);
       const useFiller = willSpeak && currentMode !== "entrevistador";
 
-      const body: Record<string, unknown> = { question, sessionId: currentMode };
+      // sessionId = modo + sufixo opcional de "nova conversa" (vazio = só o modo).
+      const sessionId = conversationTagRef.current
+        ? `${currentMode}-${conversationTagRef.current}`
+        : currentMode;
+      const body: Record<string, unknown> = { question, sessionId };
       if (responder !== undefined) body.responder = responder;
       log(
-        `enviando pergunta (modo=${currentMode}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
+        `enviando pergunta (modo=${currentMode}, sessionId=${sessionId}${responder !== undefined ? `, responder=${responder}` : ""}): ${question}`,
       );
 
       // Dispara filler e agente NO MESMO INSTANTE, em paralelo.
@@ -2006,7 +2030,7 @@ function Index() {
       const fillerHistorico = [...fillerHistoryRef.current];
       if (useFiller) {
         log(
-          `filler enviado: question="${question}", sessionId="${currentMode}", historico_filler.length=${fillerHistorico.length}`,
+          `filler enviado: question="${question}", sessionId="${sessionId}", historico_filler.length=${fillerHistorico.length}`,
         );
       }
       const fillerP = useFiller
@@ -2015,7 +2039,7 @@ function Index() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               question,
-              sessionId: currentMode,
+              sessionId,
               historico_filler: fillerHistorico,
             }),
           })
@@ -3373,6 +3397,9 @@ function Index() {
                 <button className={`btn${!muted ? " primary" : ""}`} onClick={toggleMute} disabled={!speechSupported && settings.sttEngine !== "deepgram"} title={muted ? "Ativar escuta" : "Desativar escuta"}>
                   {muted ? "🔇 Escuta OFF" : "🎤 Escuta ON"}
                 </button>
+                <button className="btn" onClick={newConversation} title="Nova conversa — zera o contexto no n8n (use entre entrevistas)">
+                  🔄 Nova conversa{conversationTag ? ` ·${conversationTag}` : ""}
+                </button>
               </div>
 
               {/* dev actions */}
@@ -4283,6 +4310,13 @@ function Index() {
               className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white hover:bg-white/25"
             >
               {isFullscreen ? "🗗" : "⛶"}
+            </button>
+            <button
+              onClick={newConversation}
+              title="Nova conversa (zera o contexto do n8n)"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-white/12 text-xl text-white hover:bg-white/25"
+            >
+              🔄
             </button>
             <button
               onClick={() => setMeetOpen(false)}
