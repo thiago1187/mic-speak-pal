@@ -13,6 +13,7 @@ import {
 } from "@/lib/heygen.functions";
 import { recallCreateBot, recallGetTranscript, recallLeaveBot } from "@/lib/recall.functions";
 import { setMeetListenPaused } from "@/lib/listen-control.functions";
+import { login, checkAuth, isAuthEnabled } from "@/lib/auth.functions";
 import {
   Accordion,
   AccordionContent,
@@ -36,6 +37,7 @@ export const Route = createFileRoute("/")({
 const SPEAK_TIMEOUT_MS = 60_000;
 const SETTINGS_KEY = "liveavatar.settings.v1";
 const MODE_KEY = "liveavatar.mode.v1";
+const AUTH_KEY = "liveavatar.auth.v1"; // token de login (senha única) no localStorage
 // Entrevistador: usado no DEFAULT_SETTINGS (campo entrevistadorSilenceSec).
 const ENTREVISTADOR_SILENCE_SEC_DEFAULT = 1;
 // Envio GUIADO PELO MUTE: o operador muta o microfone pra sinalizar "terminei de
@@ -174,7 +176,7 @@ function loadMode(): Mode {
 
 // Monta a URL pública /meet com a config do MODO escolhido pra subir no Meet.
 // Cada modo usa o webhook n8n do seu próprio modo; o filler é global.
-function buildMeetUrl(s: Settings, debug: boolean): string {
+function buildMeetUrl(s: Settings, debug: boolean, authToken = ""): string {
   const m = s.meetLaunchMode;
   const cfg = s.meetConfigs[m];
   const wr =
@@ -198,6 +200,7 @@ function buildMeetUrl(s: Settings, debug: boolean): string {
     barge: cfg.bargeIn ? "1" : "0",
     sil: String(s.meetSilenceSec ?? 0.5),
     debug: debug ? "1" : "0",
+    auth: authToken, // token de login: o /meet (bot) precisa dele pra chamar getSessionToken
   });
   return `${base}/meet?${qs.toString()}`;
 }
@@ -437,6 +440,91 @@ function Index() {
   const callDeepgramToken = useServerFn(getDeepgramToken);
   const callEnvStatus = useServerFn(getEnvStatus);
   const callSetMeetListenPaused = useServerFn(setMeetListenPaused);
+  const callLogin = useServerFn(login);
+  const callCheckAuth = useServerFn(checkAuth);
+  const callIsAuthEnabled = useServerFn(isAuthEnabled);
+  // Login por senha única. authTokenRef alimenta as chamadas protegidas.
+  const authTokenRef = useRef<string>("");
+  const [authReady, setAuthReady] = useState(false); // já sabemos se precisa login?
+  const [authRequired, setAuthRequired] = useState(false); // login está ligado no servidor?
+  const [authed, setAuthed] = useState(false);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  // No mount: descobre se o login está ligado e valida um token salvo.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { enabled } = await callIsAuthEnabled();
+        if (cancelled) return;
+        if (!enabled) {
+          authTokenRef.current = "";
+          setAuthRequired(false);
+          setAuthed(true);
+          setAuthReady(true);
+          return;
+        }
+        setAuthRequired(true);
+        const stored =
+          typeof window !== "undefined" ? window.localStorage.getItem(AUTH_KEY) || "" : "";
+        if (stored) {
+          const { ok } = await callCheckAuth({ data: { token: stored } });
+          if (cancelled) return;
+          if (ok) {
+            authTokenRef.current = stored;
+            setAuthed(true);
+          } else {
+            if (typeof window !== "undefined") window.localStorage.removeItem(AUTH_KEY);
+            authTokenRef.current = "";
+            setAuthed(false);
+          }
+        } else {
+          setAuthed(false);
+        }
+        setAuthReady(true);
+      } catch {
+        // Falha na checagem → mostra login (mais seguro que abrir o app aberto).
+        if (!cancelled) {
+          setAuthRequired(true);
+          setAuthed(false);
+          setAuthReady(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [callIsAuthEnabled, callCheckAuth]);
+
+  const doLogin = useCallback(async () => {
+    setLoggingIn(true);
+    setLoginError("");
+    try {
+      const r: any = await callLogin({ data: { password: loginPassword } });
+      if (r?.ok) {
+        authTokenRef.current = r.token || "";
+        if (typeof window !== "undefined" && r.token) {
+          window.localStorage.setItem(AUTH_KEY, r.token);
+        }
+        setAuthed(true);
+        setLoginPassword("");
+      } else {
+        setLoginError("Senha incorreta.");
+      }
+    } catch {
+      setLoginError("Erro ao entrar. Tente de novo.");
+    } finally {
+      setLoggingIn(false);
+    }
+  }, [callLogin, loginPassword]);
+
+  const doLogout = useCallback(() => {
+    authTokenRef.current = "";
+    if (typeof window !== "undefined") window.localStorage.removeItem(AUTH_KEY);
+    setAuthed(false);
+  }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const meetLogEndRef = useRef<HTMLDivElement>(null);
@@ -573,8 +661,8 @@ function Index() {
     setApiListError(null);
     try {
       const [av, vo] = await Promise.all([
-        callListAvatars({ data: { apiKey: key } }),
-        callListVoices({ data: { apiKey: key } }),
+        callListAvatars({ data: { apiKey: key, authToken: authTokenRef.current } }),
+        callListVoices({ data: { apiKey: key, authToken: authTokenRef.current } }),
       ]);
       setAvatarOptions(av);
       setVoiceOptions(vo);
@@ -1298,7 +1386,7 @@ function Index() {
         dgStreamRef.current = stream;
         micPermissionGrantedRef.current = true;
 
-        const { token } = await callDeepgramToken({ data: { apiKey: key } });
+        const { token } = await callDeepgramToken({ data: { apiKey: key, authToken: authTokenRef.current } });
 
         const AudioCtx =
           (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -1695,6 +1783,7 @@ function Index() {
           voiceId: s.voiceId,
           contextId: s.contextId,
           language: s.language,
+          authToken: authTokenRef.current,
         },
       });
       const newSession = new LiveAvatarSession(tokenResult.session_token, { voiceChat: false });
@@ -1798,6 +1887,7 @@ function Index() {
           voiceId: s.voiceId,
           contextId: s.contextId,
           language: s.language,
+          authToken: authTokenRef.current,
         },
       });
       log(
@@ -2251,7 +2341,7 @@ function Index() {
     avatarInMeetRef.current = false; // Camada 1/2: só escuta; fala sai pelo avatar local
     log(`[CAMADA 1] Recall POST /bot/ meeting_url=${s.meetLink} bot_name=Renante`);
     try {
-      const r: any = await callCreateBot({ data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante" } });
+      const r: any = await callCreateBot({ data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante", authToken: authTokenRef.current } });
       log(`[CAMADA 1] Recall resposta HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
       if (!r.ok || !r.bot?.id) { setBotStatus(`erro ${r.status}`); return; }
       const id = String(r.bot.id);
@@ -2285,11 +2375,11 @@ function Index() {
     const launchMode = s.meetLaunchMode;
     setBotStatus(`entrando (${launchMode})…`);
     avatarInMeetRef.current = true; // a página /meet fala por si; suprime fala local
-    const outputMediaUrl = buildMeetUrl(s, s.meetDebug);
+    const outputMediaUrl = buildMeetUrl(s, s.meetDebug, authTokenRef.current);
     log(`[CAMADA 3] Recall POST /bot/ (modo=${launchMode}) com output_media → ${s.avatarBaseUrl.replace(/\/+$/, "")}/meet`);
     try {
       const r: any = await callCreateBot({
-        data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante", outputMediaUrl },
+        data: { apiKey: s.recallApiKey, meetingUrl: s.meetLink, botName: "Renante", outputMediaUrl, authToken: authTokenRef.current },
       });
       log(`[CAMADA 3] Recall resposta HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
       if (!r.ok || !r.bot?.id) {
@@ -2326,7 +2416,7 @@ function Index() {
       log('Teste: "URL pública do avatar" vazia (Configurações).', "err");
       return;
     }
-    const url = buildMeetUrl(s, true); // sempre com debug no teste visual
+    const url = buildMeetUrl(s, true, authTokenRef.current); // sempre com debug no teste visual
     log(`Teste: abrindo página do avatar (modo=${s.meetLaunchMode}) em nova aba (?debug=1)`);
     window.open(url, "_blank", "noopener");
   }, [log]);
@@ -2350,7 +2440,7 @@ function Index() {
     if (!id) return;
     log(`Recall: removendo bot ${id}`);
     try {
-      const r: any = await callLeaveBot({ data: { apiKey: s.recallApiKey, botId: id } });
+      const r: any = await callLeaveBot({ data: { apiKey: s.recallApiKey, botId: id, authToken: authTokenRef.current } });
       log(`Recall leave HTTP ${r.status}\n${r.body}`, r.ok ? "ok" : "err");
     } catch (e) {
       logError("Recall leaveBot falhou", e);
@@ -2382,7 +2472,7 @@ function Index() {
       if (stopped || !botIdRef.current) return;
       const s = settingsRef.current;
       try {
-        const r: any = await callGetTranscript({ data: { apiKey: s.recallApiKey, botId: botIdRef.current } });
+        const r: any = await callGetTranscript({ data: { apiKey: s.recallApiKey, botId: botIdRef.current, authToken: authTokenRef.current } });
         if (!r.ok) {
           log(`[CAMADA 2] transcript HTTP ${r.status} ${r.body.slice(0, 200)}`, "err");
         } else {
@@ -3081,6 +3171,60 @@ function Index() {
     n8nStatus.state === "err" ? "red" :
     n8nStatus.state === "waiting" ? "amber" : "off";
 
+  // ===== Gate de login (senha única) — só bloqueia se o login estiver ligado =====
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-black text-white/70">
+        <div className="flex items-center gap-2 font-mono text-sm">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-pink-500" /> carregando…
+        </div>
+      </div>
+    );
+  }
+  if (authRequired && !authed) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-black px-4 text-white">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!loggingIn) void doLogin();
+          }}
+          className="w-full max-w-sm rounded-2xl border border-white/12 bg-[rgba(17,20,25,.8)] p-6 shadow-[0_8px_40px_rgba(0,0,0,.5)] backdrop-blur-md"
+        >
+          <div className="mb-1 text-2xl font-extrabold tracking-tight">
+            <span className="text-pink-500">G</span>Zero
+          </div>
+          <div className="mb-5 text-sm text-white/60">
+            RenAnte Avatar AI · acesso restrito
+          </div>
+          <label className="mb-1 block text-xs font-medium text-white/70">Senha de acesso</label>
+          <input
+            type="password"
+            autoFocus
+            value={loginPassword}
+            onChange={(e) => {
+              setLoginPassword(e.target.value);
+              if (loginError) setLoginError("");
+            }}
+            placeholder="digite a senha…"
+            className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/35 focus:border-pink-500/60 focus:outline-none"
+          />
+          {loginError && <div className="mt-2 text-xs text-red-400">{loginError}</div>}
+          <button
+            type="submit"
+            disabled={loggingIn || !loginPassword.trim()}
+            className="mt-4 w-full rounded-lg bg-pink-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-pink-500 disabled:opacity-40"
+          >
+            {loggingIn ? "Entrando…" : "Entrar"}
+          </button>
+          <div className="mt-4 text-center text-[11px] text-white/35">
+            Acesso protegido — fale com o responsável se não tiver a senha.
+          </div>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="cr">
 
@@ -3093,6 +3237,15 @@ function Index() {
         <span className="grow" />
         <span className="seg">heygen-sdk <b>2.x</b></span>
         <span className="seg">env <b>browser</b></span>
+        {authRequired && (
+          <button
+            onClick={doLogout}
+            title="Sair (bloquear acesso)"
+            style={{ marginLeft: 8, background: "transparent", border: "1px solid rgba(255,255,255,.2)", borderRadius: 5, color: "inherit", fontSize: 10, padding: "1px 6px", cursor: "pointer" }}
+          >
+            🔒 sair
+          </button>
+        )}
       </div>
 
       {/* ── topbar ── */}

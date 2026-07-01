@@ -1,11 +1,20 @@
 import { createServerFn } from "@tanstack/react-start";
+import { verifyAppToken } from "@/lib/auth.functions";
+
+// Barra chamadas não autenticadas (quando o login está ligado via APP_PASSWORD).
+async function requireAuth(token?: string) {
+  if (!(await verifyAppToken(token))) {
+    throw new Error("Não autorizado — faça login.");
+  }
+}
 
 type TokenInput = {
-  apiKey: string;
+  apiKey?: string;
   avatarId: string;
   voiceId: string;
   contextId: string;
   language: string;
+  authToken?: string;
 };
 
 // A apiKey pode vir vazia do cliente: nesse caso usamos a variável de ambiente
@@ -30,6 +39,7 @@ export const getSessionToken = createServerFn({ method: "POST" })
     return data;
   })
   .handler(async ({ data }) => {
+    await requireAuth(data.authToken);
     const apiKey = resolveHeygenKey(data.apiKey);
     const res = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST",
@@ -65,10 +75,11 @@ export const getSessionToken = createServerFn({ method: "POST" })
 // Gera um token de curta duração do Deepgram a partir da API key, pra usar com
 // segurança no navegador (o token vai pro WebSocket; a key fica no servidor).
 // Se a key não tiver permissão de "grant", cai pro fallback de usar a própria key.
-type DeepgramInput = { apiKey?: string };
+type DeepgramInput = { apiKey?: string; authToken?: string };
 export const getDeepgramToken = createServerFn({ method: "POST" })
   .inputValidator((data: DeepgramInput) => data ?? {})
   .handler(async ({ data }) => {
+    await requireAuth(data?.authToken);
     const apiKey = (data?.apiKey || process.env.DEEPGRAM_API_KEY || "").trim();
     if (!apiKey) {
       throw new Error(
@@ -104,7 +115,7 @@ export const getEnvStatus = createServerFn({ method: "GET" }).handler(async () =
   recall: Boolean((process.env.RECALL_API_KEY || "").trim()),
 }));
 
-type ListInput = { apiKey?: string };
+type ListInput = { apiKey?: string; authToken?: string };
 
 export type AvatarOption = {
   id: string;
@@ -127,6 +138,7 @@ export type VoiceOption = {
 export const listAvatars = createServerFn({ method: "POST" })
   .inputValidator((data: ListInput) => data ?? {})
   .handler(async ({ data }) => {
+    await requireAuth(data?.authToken);
     const headers = { "X-API-KEY": resolveHeygenKey(data?.apiKey) };
     const out: AvatarOption[] = [];
     const push = (results: any[], owned: boolean) => {
@@ -170,6 +182,7 @@ export const listAvatars = createServerFn({ method: "POST" })
 export const listVoices = createServerFn({ method: "POST" })
   .inputValidator((data: ListInput) => data ?? {})
   .handler(async ({ data }) => {
+    await requireAuth(data?.authToken);
     const r = await fetch("https://api.liveavatar.com/v1/voices?page_size=100", {
       headers: { "X-API-KEY": resolveHeygenKey(data?.apiKey) },
     });

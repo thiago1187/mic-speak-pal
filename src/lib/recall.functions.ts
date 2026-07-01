@@ -1,6 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
+import { verifyAppToken } from "@/lib/auth.functions";
 
 const RECALL_BASE = "https://us-west-2.recall.ai/api/v1";
+
+async function requireAuth(token?: string) {
+  if (!(await verifyAppToken(token))) {
+    throw new Error("Não autorizado — faça login.");
+  }
+}
 
 // A apiKey pode vir vazia do cliente: usamos a env RECALL_API_KEY (.env / Vercel).
 function resolveRecallKey(clientKey?: string): string {
@@ -18,10 +25,11 @@ function resolveRecallKey(clientKey?: string): string {
 // câmera+microfone do bot dentro da reunião (o avatar fala DENTRO do Meet).
 // Sem outputMediaUrl, o comportamento é idêntico ao das Camadas 1/2.
 type CreateBotInput = {
-  apiKey: string;
+  apiKey?: string;
   meetingUrl: string;
   botName?: string;
   outputMediaUrl?: string;
+  authToken?: string;
 };
 
 export const recallCreateBot = createServerFn({ method: "POST" })
@@ -30,6 +38,7 @@ export const recallCreateBot = createServerFn({ method: "POST" })
     return data;
   })
   .handler(async ({ data }) => {
+    await requireAuth(data.authToken);
     const apiKey = resolveRecallKey(data.apiKey);
     const body: Record<string, unknown> = {
       meeting_url: data.meetingUrl,
@@ -83,7 +92,7 @@ export const recallCreateBot = createServerFn({ method: "POST" })
     return { status: res.status, ok: res.ok, body: text, bot: json };
   });
 
-type BotIdInput = { apiKey: string; botId: string };
+type BotIdInput = { apiKey?: string; botId: string; authToken?: string };
 
 export const recallGetTranscript = createServerFn({ method: "POST" })
   .inputValidator((data: BotIdInput) => {
@@ -91,6 +100,7 @@ export const recallGetTranscript = createServerFn({ method: "POST" })
     return data;
   })
   .handler(async ({ data }) => {
+    await requireAuth(data.authToken);
     const apiKey = resolveRecallKey(data.apiKey);
     const res = await fetch(
       `${RECALL_BASE}/bot/${encodeURIComponent(data.botId)}/transcript/`,
@@ -113,6 +123,7 @@ export const recallLeaveBot = createServerFn({ method: "POST" })
     return data;
   })
   .handler(async ({ data }) => {
+    await requireAuth(data.authToken);
     const apiKey = resolveRecallKey(data.apiKey);
     const res = await fetch(
       `${RECALL_BASE}/bot/${encodeURIComponent(data.botId)}/leave_call/`,

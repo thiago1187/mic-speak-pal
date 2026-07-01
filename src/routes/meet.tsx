@@ -53,6 +53,7 @@ type Cfg = {
   bargeIn: boolean; // permitir interromper a fala dele falando por cima
   sid: string; // sessionId enviado ao webhook (= modo: conversa/reuniao/entrevistador)
   silenceSec: number; // pausa de silêncio antes de fechar a fala e mandar pro n8n
+  authToken: string; // token de login (repassado ao getSessionToken)
 };
 
 function readConfig(): Cfg {
@@ -73,6 +74,7 @@ function readConfig(): Cfg {
     bargeIn: q.get("barge") === "1",
     sid: q.get("sid") || "reuniao",
     silenceSec: Number(q.get("sil")) || 0.5,
+    authToken: q.get("auth") ?? "",
   };
 }
 
@@ -546,6 +548,7 @@ function MeetAvatar() {
             voiceId: cfg.voiceId,
             contextId: cfg.contextId,
             language: cfg.language,
+            authToken: cfg.authToken,
           },
         });
         if (cancelled) return;
